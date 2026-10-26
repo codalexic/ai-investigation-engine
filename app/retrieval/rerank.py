@@ -1,5 +1,6 @@
 from typing import Any, Protocol
 
+from app.core.config import get_settings
 from app.core.errors import RetrievalError
 from app.retrieval.store import ScoredChunk
 from app.retrieval.text import analyze
@@ -28,8 +29,9 @@ class FakeReranker:
 
 
 class CrossEncoderReranker:
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, cache_dir: str | None = None) -> None:
         self.name = model_name
+        self.cache_dir = cache_dir if cache_dir is not None else get_settings().model_cache_dir
         self._model = None
 
     @property
@@ -42,7 +44,7 @@ class CrossEncoderReranker:
                 if self.name == "cross-encoder/ms-marco-MiniLM-L-6-v2"
                 else self.name
             )
-            self._model = TextCrossEncoder(model_name=model_name)
+            self._model = TextCrossEncoder(model_name=model_name, cache_dir=self.cache_dir)
         return self._model
 
     def rerank(

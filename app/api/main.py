@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
@@ -140,7 +141,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             if container.llm and container.investigator:
                 container.investigator.llm = MeteredClient(container.llm, application.state.metrics)
-            yield
+            warmup_task = None
+            if settings.warmup if settings.warmup is not None else settings.app_env == "prod":
+
+                async def warm_models() -> None:
+                    await asyncio.sleep(0)
+                    await asyncio.to_thread(container.warm_models)
+
+                warmup_task = asyncio.create_task(warm_models())
+            try:
+                yield
+            finally:
+                if warmup_task is not None:
+                    await warmup_task
         finally:
             container.close()
 

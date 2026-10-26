@@ -55,6 +55,7 @@ class FastEmbedEmbedder:
         query_cache_size: int | None = None,
     ) -> None:
         self.name, self.batch_size, self.cache_dir = model_name, batch_size, cache_dir
+        self.cache_dir = cache_dir if cache_dir is not None else get_settings().model_cache_dir
         self._model = None
         self._cached_query = lru_cache(
             maxsize=get_settings().query_cache_size

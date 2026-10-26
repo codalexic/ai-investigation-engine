@@ -44,3 +44,7 @@ class ServiceUnavailableError(AppError):
 
 class InvalidRequestError(AppError):
     pass
+
+
+class MigrationError(AppError):
+    pass

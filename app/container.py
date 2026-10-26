@@ -60,7 +60,11 @@ class Container:
                 resources.callback(close_llm, llm)
             if llm and settings.llm_cache_enabled:
                 llm = CachedClient(llm, engine)
-            nli = FakeNli() if settings.app_env == "test" else OnnxNliModel(settings.nli_model)
+            nli = (
+                FakeNli()
+                if settings.app_env == "test"
+                else OnnxNliModel(settings.nli_model, settings.model_cache_dir)
+            )
             investigator = (
                 InvestigationEngine(
                     retriever, store, llm, nli if settings.nli_enabled else None, settings
@@ -71,6 +75,19 @@ class Container:
             result = cls(settings, engine, registry, store, retriever, pipeline, llm, investigator)
             resources.pop_all()
             return result
+
+    def warm_models(self) -> None:
+        try:
+            self.store.embedder.embed_query("warmup")
+            if self.settings.rerank_enabled:
+                _ = self.retriever.reranker.model
+            if self.settings.nli_enabled:
+                nli = self.investigator.nli if self.investigator else None
+                if not isinstance(nli, OnnxNliModel):
+                    nli = OnnxNliModel(self.settings.nli_model, self.settings.model_cache_dir)
+                nli._load()
+        except Exception:
+            get_logger(__name__).exception("model_warmup_failed")
 
     def close(self) -> None:
         try:

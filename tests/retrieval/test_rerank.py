@@ -21,7 +21,7 @@ def test_rerankers(monkeypatch):
     reranker = CrossEncoderReranker("cross-encoder/ms-marco-MiniLM-L-6-v2")
     assert reranker._model is None
     assert reranker.rerank("cat", chunks, 1) == [(chunks[1], 0.9)]
-    constructor.assert_called_once_with(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
+    constructor.assert_called_once_with(model_name="Xenova/ms-marco-MiniLM-L-6-v2", cache_dir=None)
     model.rerank.side_effect = RuntimeError("failure")
     with pytest.raises(RetrievalError):
         reranker.rerank("cat", chunks, 1)

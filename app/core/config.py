@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8")
 
     app_env: Literal["local", "prod", "test"] = "local"
+    model_cache_dir: str | None = None
+    warmup: bool | None = None
+    hf_token: SecretStr | None = None
     log_level: str = "INFO"
     qdrant_url: str = ":memory:"
     qdrant_api_key: SecretStr | None = None
@@ -61,6 +64,11 @@ class Settings(BaseSettings):
     answer_cache_ttl_s: int = Field(default=86400, ge=0)
     rate_limit_per_minute: int = Field(default=10, ge=1)
     request_timeout_s: float = 30.0
+
+    @field_validator("model_cache_dir", "warmup", mode="before")
+    @classmethod
+    def empty_optional(cls, value: str | bool | None) -> str | bool | None:
+        return None if value == "" else value
 
     @field_validator("admin_token", mode="before")
     @classmethod
