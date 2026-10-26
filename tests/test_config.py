@@ -57,6 +57,10 @@ def test_defaults() -> None:
         "bm25_b": 0.75,
         "entity_boost": 0.15,
         "query_cache_size": 1024,
+        "max_upload_mb": 20,
+        "admin_token": None,
+        "answer_cache_ttl_s": 86400,
+        "rate_limit_per_minute": 10,
         "request_timeout_s": 30.0,
     }
 

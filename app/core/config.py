@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,7 +56,16 @@ class Settings(BaseSettings):
     bm25_b: float = 0.75
     entity_boost: float = 0.15
     query_cache_size: int = 1024
+    max_upload_mb: int = Field(default=20, ge=1)
+    admin_token: SecretStr | None = None
+    answer_cache_ttl_s: int = Field(default=86400, ge=0)
+    rate_limit_per_minute: int = Field(default=10, ge=1)
     request_timeout_s: float = 30.0
+
+    @field_validator("admin_token", mode="before")
+    @classmethod
+    def empty_admin_token(cls, value: str | SecretStr | None) -> str | SecretStr | None:
+        return None if value == "" else value
 
 
 @lru_cache
