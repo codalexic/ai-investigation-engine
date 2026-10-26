@@ -1,26 +1,43 @@
+from contextlib import asynccontextmanager
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
-from app.core.config import get_settings
+from app.api.llm_metrics import MeteredClient
+from app.api.observability import Metrics, RateLimiter
+from app.api.persistence import QueryRepository
+from app.api.routes import documents, investigate, search, system
+from app.container import Container
+from app.core.config import Settings, get_settings
 from app.core.errors import (
+    AccessDeniedError,
     AppError,
     ConfigurationError,
     DocumentNotFoundError,
     IngestionError,
+    InvalidRequestError,
     LLMError,
     LLMRateLimitError,
     RetrievalError,
+    ServiceUnavailableError,
     UnsupportedFormatError,
+    UploadTooLargeError,
 )
 from app.core.logging import configure_logging, get_logger, request_id
 
 logger = get_logger(__name__)
 ERROR_STATUS = {
+    AccessDeniedError: 403,
+    UploadTooLargeError: 413,
+    InvalidRequestError: 422,
+    ServiceUnavailableError: 503,
     AppError: 500,
     DocumentNotFoundError: 404,
     UnsupportedFormatError: 415,
@@ -40,6 +57,8 @@ class RequestLoggingMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        application = scope["app"]
+        path = scope["path"]
         incoming_id = Request(scope).headers.get("X-Request-ID") or str(uuid4())
         token = request_id.set(incoming_id)
         started = perf_counter()
@@ -54,7 +73,31 @@ class RequestLoggingMiddleware:
             await send(message)
 
         try:
-            await self.app(scope, receive, send_with_request_id)
+            retry = 0
+            if path.startswith(("/api/investigate", "/api/search", "/api/documents")):
+                group = "investigate" if path.startswith("/api/investigate") else "general"
+                capacity = (
+                    application.state.settings.rate_limit_per_minute
+                    if group == "investigate"
+                    else 120
+                )
+                retry = application.state.limiter.check(
+                    (scope.get("client") or ("unknown", 0))[0], group, capacity
+                )
+            if retry:
+                for route in application.state.api_routes:
+                    match, _ = route.matches(scope)
+                    if match == Match.FULL:
+                        scope["route"] = route
+                        break
+                response = JSONResponse(
+                    {"error": {"type": "RateLimitError", "message": "Rate limit exceeded"}},
+                    status_code=429,
+                    headers={"Retry-After": str(retry)},
+                )
+                await response(scope, receive, send_with_request_id)
+            else:
+                await self.app(scope, receive, send_with_request_id)
         finally:
             logger.info(
                 "request_completed",
@@ -64,6 +107,12 @@ class RequestLoggingMiddleware:
                     "status": status,
                     "latency_ms": round((perf_counter() - started) * 1000, 3),
                 },
+            )
+            route = scope.get("route")
+            template = getattr(route, "path", "unmatched")
+            application.state.metrics.requests.labels(template, str(status)).inc()
+            application.state.metrics.http_latency.labels(template, str(status)).observe(
+                perf_counter() - started
             )
             request_id.reset(token)
 
@@ -76,10 +125,40 @@ async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
     )
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
     configure_logging(settings.log_level)
-    application = FastAPI(title="AI Investigation Engine", version=__version__)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        container = Container.build(settings)
+        application.state.container = container
+        try:
+            application.state.queries = QueryRepository(container.registry)
+            container.retriever.observe = lambda stage, seconds: (
+                application.state.metrics.retrieval.labels(stage).observe(seconds)
+            )
+            if container.llm and container.investigator:
+                container.investigator.llm = MeteredClient(container.llm, application.state.metrics)
+            yield
+        finally:
+            container.close()
+
+    application = FastAPI(title="AI Investigation Engine", version=__version__, lifespan=lifespan)
+    application.state.settings = settings
+    application.state.metrics = Metrics()
+    application.state.limiter = RateLimiter()
+    application.state.api_routes = []
+    for router in (documents.router, search.router, investigate.router, system.router):
+        application.include_router(router)
+        application.state.api_routes.extend(router.routes)
+    static = Path(__file__).parents[1] / "ui" / "static"
+    application.mount("/static", StaticFiles(directory=static, html=True), name="static")
+
+    @application.get("/", include_in_schema=False)
+    def index():
+        return FileResponse(static / "index.html")
+
     application.add_middleware(RequestLoggingMiddleware)
     application.add_exception_handler(AppError, handle_app_error)
 

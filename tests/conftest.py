@@ -19,6 +19,21 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
+    from app.container import Container
+
+    original = Container.build
+    monkeypatch.setattr(
+        Container,
+        "build",
+        lambda settings: original(
+            Settings(
+                _env_file=None,
+                app_env="test",
+                database_url=f"sqlite:///{tmp_path}/api.db",
+                qdrant_collection="api_test",
+            )
+        ),
+    )
     with TestClient(create_app()) as test_client:
         yield test_client
