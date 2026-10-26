@@ -8,7 +8,7 @@ from app.agent.nli import FakeNli
 from app.api.main import create_app
 from app.container import Container, get_container
 from app.core.config import Settings
-from app.llm.types import LLMResponse, Usage
+from app.llm.types import LLMResponse, StreamResult, Usage
 
 
 class FakeLLM:
@@ -24,6 +24,9 @@ class FakeLLM:
         )
 
     def stream(self, messages, **kwargs):
+        return StreamResult(lambda result: self._stream(messages, result, **kwargs))
+
+    def _stream(self, messages, result, **kwargs):
         yield "payment-service rollback succeeded [E1]."
         yield (
             "<meta>"
@@ -37,7 +40,7 @@ class FakeLLM:
             )
             + "</meta>"
         )
-        self.last_response = LLMResponse(
+        result.response = LLMResponse(
             provider="fake", model=self.model, usage=Usage(prompt_tokens=10, completion_tokens=8)
         )
 

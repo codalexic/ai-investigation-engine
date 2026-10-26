@@ -88,3 +88,74 @@ def test_empty_admin_token_is_unset():
     from app.core.config import Settings
 
     assert Settings(_env_file=None, admin_token="").admin_token is None
+
+
+def test_body_limit_checks_length_before_receive_and_chunked_bytes():
+    import asyncio
+
+    from app.api.main import RequestBodyLimitMiddleware
+
+    async def exercise(headers, bodies):
+        reads = []
+        sent = []
+        called = []
+        iterator = iter(bodies)
+
+        async def receive():
+            reads.append(True)
+            return {"type": "http.request", "body": next(iterator), "more_body": True}
+
+        async def send(message):
+            sent.append(message)
+
+        async def application(scope, receive, send):
+            called.append(True)
+
+        middleware = RequestBodyLimitMiddleware(application, limit=4)
+        await middleware({"type": "http", "headers": headers}, receive, send)
+        assert not called
+        assert sent[0]["status"] == 413
+        return len(reads)
+
+    assert asyncio.run(exercise([(b"content-length", b"5")], [])) == 0
+    assert asyncio.run(exercise([], [b"abc", b"de", b"never read"])) == 2
+
+
+def test_worker_warning(api_client, caplog, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.api.main import create_app
+
+    monkeypatch.setattr("app.api.main.configure_logging", lambda level: None)
+    settings = api_client.app.state.settings.model_copy(update={"web_concurrency": 2})
+    with caplog.at_level("WARNING"), TestClient(create_app(settings)):
+        pass
+    assert any("single_worker_required" in record.message for record in caplog.records)
+
+
+def test_answer_cache_fingerprints_generation_and_verification(api_client):
+    from app.agent import prompts
+
+    queries = api_client.app.state.queries
+    settings = api_client.app.state.settings
+    original = queries.key("Question", {}, {}, settings)
+    for field, value in {
+        "llm_primary_model": "different",
+        "llm_provider_order": ["gemini", "groq"],
+        "llm_temperature": 0.7,
+        "nli_enabled": False,
+        "nli_model": "other",
+        "support_threshold": 0.9,
+        "contradiction_threshold": 0.9,
+        "abstain_min_evidence_score": 0.5,
+        "agent_max_steps": 9,
+    }.items():
+        assert (
+            queries.key("Question", {}, {}, settings.model_copy(update={field: value})) != original
+        )
+    previous = prompts.SYNTHESIZER
+    try:
+        prompts.SYNTHESIZER += " revised"
+        assert queries.key("Question", {}, {}, settings) != original
+    finally:
+        prompts.SYNTHESIZER = previous

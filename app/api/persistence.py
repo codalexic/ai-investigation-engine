@@ -7,7 +7,9 @@ from uuid import uuid4
 from sqlalchemy import JSON, Column, DateTime, Integer, MetaData, String, Table, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.agent import prompts
 from app.agent.engine import InvestigationResult
+from app.core.config import Settings
 from app.core.errors import ConfigurationError
 from app.ingest.registry import DocumentRegistry
 
@@ -46,14 +48,33 @@ class QueryRepository:
         except SQLAlchemyError as exc:
             raise ConfigurationError("Unable to initialize query storage") from exc
 
-    def key(self, question: str, filters: dict[str, Any], retrieval: dict[str, Any]) -> str:
+    def key(
+        self,
+        question: str,
+        filters: dict[str, Any],
+        retrieval: dict[str, Any],
+        settings: Settings | None = None,
+    ) -> str:
         with self.registry.session() as session:
             version = session.scalar(
                 select(self.meta.c.value).where(self.meta.c.key == "index_version")
             )
+        settings = settings or Settings(_env_file=None)
+        fingerprint = {
+            k: v
+            for k, v in settings.model_dump(mode="json").items()
+            if k.startswith(("llm_", "nli_", "agent_", "abstain_"))
+            or k in {"openrouter_model", "support_threshold", "contradiction_threshold"}
+        }
+        fingerprint["prompts"] = hashlib.sha256(
+            json.dumps(
+                {k: v for k, v in vars(prompts).items() if isinstance(v, str) and k.isupper()},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
         return hashlib.sha256(
             json.dumps(
-                [" ".join(question.lower().split()), filters, retrieval, str(version)],
+                [" ".join(question.lower().split()), filters, retrieval, str(version), fingerprint],
                 sort_keys=True,
             ).encode()
         ).hexdigest()
