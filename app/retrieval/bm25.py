@@ -45,7 +45,7 @@ class Bm25Statistics:
 
 
 class Bm25StatsRepository:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, *, read_only: bool = False) -> None:
         self.engine = engine
         metadata = MetaData()
         self.terms = Table(
@@ -55,7 +55,8 @@ class Bm25StatsRepository:
             "bm25_meta", metadata, Column("key", String, primary_key=True), Column("value", Integer)
         )
         try:
-            metadata.create_all(engine)
+            if not read_only:
+                metadata.create_all(engine)
         except SQLAlchemyError as exc:
             raise RetrievalError("Cannot initialize BM25 statistics") from exc
 
