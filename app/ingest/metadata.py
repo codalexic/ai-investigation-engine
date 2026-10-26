@@ -83,11 +83,11 @@ def extract_metadata(
     winners = [label for label, score in scores.items() if score == best]
     return DocumentMetadata(
         doc_id=doc_id,
-        source=filename,
+        source=info.get("source", filename),
         format=info.get("format", "txt"),
         title=title,
         created_at=created,
-        doc_type=winners[0] if best and len(winners) == 1 else "other",
+        doc_type=info.get("doc_type") or (winners[0] if best and len(winners) == 1 else "other"),
         entities=extract_entities(parsed.text, extra_services),
         extra=dict(info),
     )
