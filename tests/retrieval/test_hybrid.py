@@ -110,3 +110,74 @@ def test_reranking_changes_dense_order(retrieval, monkeypatch):
     result = retriever.search("rollback", {**options, "rerank": True})
     assert result.chunks[0].chunk_id == "second"
     assert result.chunks[0].explain["rerank_score"] == 1.0
+
+
+def test_planner_hints_preserve_undated_evidence(retrieval, chunk):
+    from unittest.mock import Mock
+
+    from app.agent.evidence import EvidenceStore
+    from app.agent.investigator import Investigator
+    from app.agent.planner import Plan
+    from app.agent.tools import InvestigationTools
+    from app.core.config import Settings
+    from app.retrieval.store import QueryFilters
+
+    store, retriever = retrieval
+    store.upsert_chunks(
+        [
+            chunk("plain", "rollback succeeded", doc_id="plain", created_at=None, entities={}),
+            chunk(
+                "service",
+                "payment-service rollback",
+                doc_id="service",
+                entities={"services": ["payment-service"]},
+            ),
+            chunk(
+                "change", "CHG-123 rollback", doc_id="change", entities={"change_ids": ["CHG-123"]}
+            ),
+        ]
+    )
+    evidence = EvidenceStore()
+    tools = InvestigationTools(
+        retriever, store, evidence, QueryFilters(), {"rerank": False, "mmr": False}
+    )
+    plan = Plan.model_validate(
+        {
+            "entities": {"services": ["payment-service"], "change_ids": ["CHG-123"]},
+            "time_range": {"from": "2024-01-01", "to": "2024-02-01"},
+        }
+    )
+    list(
+        Investigator(Mock(), tools, Settings(_env_file=None, agent_max_steps=0)).run(
+            "rollback", plan, []
+        )
+    )
+    assert {e.chunk.doc_id for e in evidence.items.values()} == {"plain", "service", "change"}
+    assert tools.filters == QueryFilters()
+    hinted = retriever.search(
+        "rollback", {"rerank": False, "mmr": False}, QueryFilters(entity_should=plan.entities)
+    )
+    assert {c.doc_id for c in hinted.chunks} == {"service", "change"}
+    restricted = retriever.search(
+        "rollback",
+        {"rerank": False, "mmr": False},
+        QueryFilters(doc_ids=["change"], entity_should=plan.entities),
+    )
+    assert {c.doc_id for c in restricted.chunks} == {"change"}
+
+
+def test_date_range_boost_keeps_undated_candidates(retrieval, chunk):
+    from datetime import date
+
+    store, retriever = retrieval
+    store.upsert_chunks(
+        [
+            chunk("undated", "rollback", doc_id="undated", created_at=None, entities={}),
+            chunk("dated", "rollback", doc_id="dated", created_at="2024-01-15", entities={}),
+        ]
+    )
+    options = {"mode": "sparse", "rerank": False, "mmr": False}
+    result = retriever.search("rollback", options, date_range=(date(2024, 1, 1), date(2024, 1, 31)))
+    assert {c.doc_id for c in result.chunks} == {"dated", "undated"}
+    boosts = {c.doc_id: c.explain["boost"] for c in result.chunks}
+    assert boosts["dated"] > boosts["undated"]

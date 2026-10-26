@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field, replace
+from datetime import date
 from time import perf_counter
 from typing import Any, Literal
 
@@ -82,6 +83,7 @@ class HybridRetriever:
         query: str,
         config: RetrievalConfig | dict[str, Any] | None = None,
         filters: QueryFilters | None = None,
+        date_range: tuple[date, date] | None = None,
     ) -> RetrievalResult:
         if not query.strip():
             raise RetrievalError("Query must not be empty")
@@ -128,7 +130,7 @@ class HybridRetriever:
         for key, chunk in candidates.items():
             boost = entity_boost(
                 entities, chunk.payload.get("entities", {}), cfg.entity_boost
-            ) * date_proximity_boost(query, chunk.payload, cfg.entity_boost)
+            ) * date_proximity_boost(query, chunk.payload, cfg.entity_boost, date_range)
             explanations[key] = {
                 "dense_rank": rankings["dense"].index(key) + 1
                 if key in rankings["dense"]

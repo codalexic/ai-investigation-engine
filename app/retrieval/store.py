@@ -25,6 +25,7 @@ class QueryFilters(BaseModel):
     services: list[str] | None = None
     change_ids: list[str] | None = None
     incident_ids: list[str] | None = None
+    entity_should: dict[str, list[str]] | None = None
     date_from: date | None = None
     date_to: date | None = None
 
@@ -52,7 +53,15 @@ class QueryFilters(BaseModel):
                     ),
                 )
             )
-        return m.Filter(must=conditions)
+        return m.Filter(
+            must=conditions,
+            should=[
+                m.FieldCondition(key=f"entities.{k}", match=m.MatchAny(any=v))
+                for k, v in (self.entity_should or {}).items()
+                if v
+            ]
+            or None,
+        )
 
 
 @dataclass
