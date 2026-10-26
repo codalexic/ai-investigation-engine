@@ -1,0 +1,13 @@
+{
+  "counts_per_source": {
+    "synthetic": 45
+  },
+  "duplicates": 0,
+  "near_duplicates": 1,
+  "chunks": 237,
+  "seconds": 25.071420799999032,
+  "records_per_sec": 1.794872351231157,
+  "embedding_model": "BAAI/bge-small-en-v1.5",
+  "chunk_strategy": "structure",
+  "qdrant_point_count": 67224
+}
