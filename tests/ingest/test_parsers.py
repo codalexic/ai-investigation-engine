@@ -116,3 +116,42 @@ def test_csv_and_unsupported():
     assert parse_date(parsed.metadata["created_at"]) == date(2024, 3, 14)
     with pytest.raises(UnsupportedFormatError):
         get_parser("unknown.bin")
+
+
+@pytest.mark.parametrize("kind", ["ratio", "member", "total"])
+def test_docx_expansion_limits(monkeypatch, kind):
+    from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+
+    from app.core.config import Settings
+
+    stream = io.BytesIO()
+    with ZipFile(stream, "w", compression=ZIP_DEFLATED if kind == "ratio" else ZIP_STORED) as z:
+        z.writestr("word/document.xml", b"a" * (26 * 1024**2 if kind == "member" else 2 * 1024**2))
+    monkeypatch.setattr(
+        "app.ingest.parsers.get_settings",
+        lambda: Settings(_env_file=None, max_extracted_mb=1 if kind == "total" else 50),
+    )
+    with pytest.raises(
+        UnsupportedFormatError,
+        match={"ratio": "ratio", "member": "member", "total": "max_extracted_mb"}[kind],
+    ):
+        get_parser("x.docx").parse(stream.getvalue(), "x.docx")
+
+
+@pytest.mark.parametrize(
+    "name,data",
+    [
+        ("x.txt", b"long text"),
+        ("x.html", b"<p>long text</p>"),
+        ("x.json", b'{"text":"long text"}'),
+        ("x.csv", b"text\nlong text"),
+    ],
+)
+def test_extracted_text_limit(monkeypatch, name, data):
+    from app.core.config import Settings
+
+    monkeypatch.setattr(
+        "app.ingest.parsers.get_settings", lambda: Settings(_env_file=None, max_extracted_chars=4)
+    )
+    with pytest.raises(IngestionError, match="max_extracted_chars"):
+        get_parser(name).parse(data, name)

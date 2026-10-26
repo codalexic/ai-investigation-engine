@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     entity_boost: float = 0.15
     query_cache_size: int = 1024
     max_upload_mb: int = Field(default=20, ge=1)
+    max_extracted_mb: int = Field(default=50, ge=1)
+    max_extracted_chars: int = Field(default=2_000_000, ge=1)
+    web_concurrency: int = Field(default=1, ge=1)
+    uvicorn_workers: int = Field(default=1, ge=1)
     admin_token: SecretStr | None = None
     answer_cache_ttl_s: int = Field(default=86400, ge=0)
     rate_limit_per_minute: int = Field(default=10, ge=1)
