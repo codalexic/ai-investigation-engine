@@ -23,6 +23,7 @@ def test_defaults() -> None:
         "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
         "chunk_strategy": "structure",
         "chunk_size": 400,
+        "chunk_min_tokens": 80,
         "chunk_overlap": 60,
         "retrieval_top_k": 10,
         "request_timeout_s": 30.0,
