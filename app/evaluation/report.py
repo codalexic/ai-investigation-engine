@@ -211,6 +211,37 @@ def _summary(results: list[tuple[str, dict]], counts: Counter) -> list[str]:
         if e2e
         else "Not run yet"
     )
+    lines.append("### Performance")
+    from app.evaluation.benchmark import performance_tables
+
+    benchmarks = [result for _, result in results if result.get("kind") == "benchmark"]
+    if not benchmarks:
+        lines.append("Not run yet")
+    for benchmark in benchmarks:
+        lines.extend(performance_tables(benchmark))
+    lines.append("#### Indexing throughput")
+    indexing = next((value for name, value in results if name == "indexing_documents"), None)
+    if indexing:
+        records = indexing.get("records", sum(indexing.get("counts_per_source", {}).values()))
+        seconds = indexing.get("seconds")
+        rate = indexing.get("records_per_sec")
+        if rate is None and seconds:
+            rate = records / seconds
+        lines.append(
+            _grid(
+                ["Records", "Chunks", "Seconds", "Records/s"],
+                [
+                    [
+                        str(records),
+                        str(indexing.get("chunks", "n/a")),
+                        _number(seconds),
+                        _number(rate),
+                    ]
+                ],
+            )
+        )
+    else:
+        lines.append("Not run yet")
     return lines
 
 
@@ -255,7 +286,7 @@ def build(root: Path = Path(".")) -> Path:
         "cached calls incur no new estimated cost. Judge cost is reported separately.",
         "### Reproducibility",
         "```bash\nmake data\nmake index\nmake index-chunking\nmake eval-retrieval\n"
-        "make eval-chunking\nmake eval-embeddings\nmake eval-e2e\nmake report\n```",
+        "make eval-chunking\nmake eval-embeddings\nmake eval-e2e\nmake benchmark\nmake report\n```",
         "Existing collection evaluations open registry databases read-only; "
         "embeddings use isolated "
         "emb_* collections and separate registry databases. End-to-end "

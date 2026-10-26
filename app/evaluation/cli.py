@@ -18,6 +18,28 @@ from app.llm.client import build_llm
 logger = get_logger(__name__)
 
 
+def benchmark_main() -> None:
+    from app.evaluation.benchmark import run, select_questions
+
+    parser = argparse.ArgumentParser(
+        description="Benchmark retrieval on the existing documents index"
+    )
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--concurrency", default="1,4,8")
+    args = parser.parse_args()
+    selected = select_questions(limit=args.limit)
+    settings = settings_for("documents", "sqlite:///./data/registry_documents.db")
+    if settings.app_env == "test":
+        raise ConfigurationError("The benchmark CLI requires real models")
+    with connect(settings) as connection:
+        run(
+            connection,
+            selected,
+            tuple(int(c) for c in args.concurrency.split(",")),
+            Path("eval/results/benchmark.json"),
+        )
+
+
 def settings_for(collection: str, database_url: str | None = None) -> Settings:
     safe_name(collection)
     overrides = {"qdrant_collection": collection}
