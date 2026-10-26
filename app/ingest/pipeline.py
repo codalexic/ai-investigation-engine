@@ -1,7 +1,9 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from functools import wraps
+from threading import RLock
 from time import perf_counter
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, ParamSpec, Protocol, TypeVar
 from uuid import uuid4
 
 import numpy as np
@@ -13,16 +15,32 @@ from app.ingest.chunking import Chunker
 from app.ingest.dedup import LSHIndex, MinHasher, content_hash
 from app.ingest.metadata import extract_metadata
 from app.ingest.models import Chunk, ParsedDocument, Section
-from app.ingest.parsers import get_parser, normalize_text
+from app.ingest.parsers import check_text_length, get_parser, normalize_text
 from app.ingest.registry import DocumentRecord, DocumentRegistry
 
 logger = get_logger(__name__)
+_WRITE_LOCK = RLock()
+
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def serialized(method: Callable[P, T]) -> Callable[P, T]:
+    @wraps(method)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
+        with _WRITE_LOCK:
+            return method(*args, **kwargs)
+
+    return wrapped
 
 
 class ChunkSink(Protocol):
     def upsert_chunks(self, chunks: list[Chunk]) -> None: ...
 
     def delete_document(self, doc_id: str) -> None: ...
+    def delete_version(self, doc_id: str, version: int, exclude: bool = False) -> None: ...
+    def update_metadata(self, doc_id: str, metadata: dict) -> None: ...
 
 
 class InMemoryChunkSink:
@@ -35,11 +53,28 @@ class InMemoryChunkSink:
     def delete_document(self, doc_id: str) -> None:
         self.chunks = {key: chunk for key, chunk in self.chunks.items() if chunk.doc_id != doc_id}
 
+    def delete_version(self, doc_id: str, version: int, exclude: bool = False) -> None:
+        self.chunks = {
+            k: c
+            for k, c in self.chunks.items()
+            if not (
+                c.doc_id == doc_id
+                and ((c.version != version) if exclude else (c.version == version))
+            )
+        }
+
+    def update_metadata(self, doc_id: str, metadata: dict) -> None:
+        for chunk in self.chunks.values():
+            if chunk.doc_id == doc_id:
+                chunk.metadata.update(metadata)
+
 
 @dataclass
 class IngestResult:
     doc_id: str
-    status: Literal["created", "duplicate", "near_duplicate", "unchanged", "updated"]
+    status: Literal[
+        "created", "duplicate", "near_duplicate", "unchanged", "updated", "metadata_updated"
+    ]
     duplicate_of: str | None = None
     version: int = 1
     chunk_count: int = 0
@@ -77,6 +112,7 @@ class IngestionPipeline:
         )
         return result
 
+    @serialized
     def ingest(
         self,
         data: bytes,
@@ -94,8 +130,22 @@ class IngestionPipeline:
         digest = content_hash(parsed.text)
         version = old.version + 1 if old else 1
         if old and old.status == "active" and old.content_hash == digest:
+            fields = metadata.model_dump(mode="json")
+            fields["created_at"] = metadata.created_at
+            changed = any(getattr(old, name) != value for name, value in fields.items())
+            if changed:
+                self.sink.update_metadata(key, metadata.model_dump(mode="json"))
+                for name, value in fields.items():
+                    setattr(old, name, value)
+                self.registry.upsert(old)
             return self._log(
-                IngestResult(key, "unchanged", old.duplicate_of, old.version, old.chunk_count),
+                IngestResult(
+                    key,
+                    "metadata_updated" if changed else "unchanged",
+                    old.duplicate_of,
+                    old.version,
+                    old.chunk_count,
+                ),
                 started,
             )
         duplicate = self.registry.get_by_hash(digest)
@@ -122,9 +172,6 @@ class IngestionPipeline:
                 started,
             )
         chunks = self.chunker.chunk(key, version, parsed, metadata)
-        if old:
-            self.sink.delete_document(key)
-        self.sink.upsert_chunks(chunks)
         fields = metadata.model_dump(mode="json")
         fields["created_at"] = metadata.created_at
         record = DocumentRecord(
@@ -139,8 +186,14 @@ class IngestionPipeline:
         )
         if old:
             record.ingested_at = old.ingested_at
-        self.registry.upsert(record)
-        self.registry.add_version(key, version, digest)
+        try:
+            self.sink.upsert_chunks(chunks)
+            self.registry.upsert(record, add_version=True)
+        except Exception:
+            self.sink.delete_version(key, version)
+            raise
+        if old:
+            self.sink.delete_version(key, version, exclude=True)
         self.lsh.add(key, signature)
         status = "updated" if old else ("near_duplicate" if near else "created")
         return self._log(
@@ -155,6 +208,7 @@ class IngestionPipeline:
             started,
         )
 
+    @serialized
     def update(self, doc_id: str, data: bytes, filename: str) -> IngestResult:
         record = self.registry.get(doc_id)
         if record is None or record.status != "active":
@@ -162,6 +216,7 @@ class IngestionPipeline:
         metadata = {key: value for key, value in record.extra.items() if key != "format"}
         return self.ingest(data, filename, doc_id, metadata)
 
+    @serialized
     def delete(self, doc_id: str) -> None:
         if self.registry.get(doc_id) is None:
             raise DocumentNotFoundError(doc_id)
@@ -169,12 +224,14 @@ class IngestionPipeline:
         self.registry.mark_deleted(doc_id)
         self.lsh.remove(doc_id)
 
+    @serialized
     def rebuild_lsh(self) -> None:
         for key in list(self.lsh.signatures):
             self.lsh.remove(key)
         for key, signature in self.registry.iter_signatures():
             self.lsh.add(key, signature)
 
+    @serialized
     def ingest_records(self, records: Iterable[dict], batch_size: int = 100) -> dict[str, int]:
         if batch_size < 1:
             raise IngestionError("Batch size must be positive")
@@ -225,6 +282,7 @@ class IngestionPipeline:
             seen_ids.add(key)
             batch_records += 1
             text = normalize_text(str(item.get("text", "")))
+            check_text_length(text)
             digest = content_hash(text)
             if digest in known:
                 counts["duplicate"] += 1

@@ -1,7 +1,11 @@
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import wraps
 from hashlib import blake2b
 from math import log
+from threading import RLock
+from typing import Any, ParamSpec, TypeVar
 
 from qdrant_client.models import SparseVector
 from sqlalchemy import Column, Integer, MetaData, String, Table, delete, insert, select
@@ -11,24 +15,40 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.errors import RetrievalError
 from app.retrieval.text import analyze
 
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def locked(method: Callable[P, T]) -> Callable[P, T]:
+    @wraps(method)
+    def wrapped(self: Any, *args: Any, **kwargs: Any) -> T:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
 
 @dataclass
 class Bm25Statistics:
+    _lock: object = field(default_factory=RLock, repr=False, init=False, compare=False)
     N: int = 0
     total_length: int = 0
     df: Counter[str] = field(default_factory=Counter)
     dirty: set[str] = field(default_factory=set, repr=False)
 
     @property
+    @locked
     def avgdl(self) -> float:
         return self.total_length / self.N if self.N else 0.0
 
+    @locked
     def add_document(self, tokens: list[str]) -> None:
         self.N += 1
         self.total_length += len(tokens)
         self.df.update(set(tokens))
         self.dirty.update(tokens)
 
+    @locked
     def remove_document(self, tokens: list[str]) -> None:
         if self.N < 1 or any(self.df[t] < 1 for t in set(tokens)):
             raise RetrievalError("Cannot remove an unindexed document")
@@ -40,6 +60,7 @@ class Bm25Statistics:
                 del self.df[term]
         self.dirty.update(tokens)
 
+    @locked
     def idf(self, term: str) -> float:
         return log(1 + (self.N - self.df[term] + 0.5) / (self.df[term] + 0.5))
 
@@ -47,6 +68,7 @@ class Bm25Statistics:
 class Bm25StatsRepository:
     def __init__(self, engine: Engine, *, read_only: bool = False) -> None:
         self.engine = engine
+        self._save_lock = RLock()
         metadata = MetaData()
         self.terms = Table(
             "bm25_terms", metadata, Column("term", String, primary_key=True), Column("df", Integer)
@@ -73,24 +95,29 @@ class Bm25StatsRepository:
             raise RetrievalError("Cannot load BM25 statistics") from exc
 
     def save(self, stats: Bm25Statistics) -> None:
-        try:
-            with self.engine.begin() as conn:
-                if stats.dirty:
-                    conn.execute(delete(self.terms).where(self.terms.c.term.in_(stats.dirty)))
-                    rows = [{"term": t, "df": stats.df[t]} for t in stats.dirty if stats.df[t]]
-                    if rows:
-                        conn.execute(insert(self.terms), rows)
-                conn.execute(delete(self.meta))
-                conn.execute(
-                    insert(self.meta),
-                    [
-                        {"key": "N", "value": stats.N},
-                        {"key": "total_length", "value": stats.total_length},
-                    ],
-                )
-            stats.dirty.clear()
-        except SQLAlchemyError as exc:
-            raise RetrievalError("Cannot save BM25 statistics") from exc
+        with self._save_lock:
+            with stats._lock:
+                dirty, stats.dirty = stats.dirty, set()
+                rows = [{"term": t, "df": stats.df[t]} for t in dirty if stats.df[t]]
+                count, length = stats.N, stats.total_length
+            try:
+                with self.engine.begin() as conn:
+                    if dirty:
+                        conn.execute(delete(self.terms).where(self.terms.c.term.in_(dirty)))
+                        if rows:
+                            conn.execute(insert(self.terms), rows)
+                    conn.execute(delete(self.meta))
+                    conn.execute(
+                        insert(self.meta),
+                        [
+                            {"key": "N", "value": count},
+                            {"key": "total_length", "value": length},
+                        ],
+                    )
+            except SQLAlchemyError as exc:
+                with stats._lock:
+                    stats.dirty.update(dirty)
+                raise RetrievalError("Cannot save BM25 statistics") from exc
 
 
 def term_id(term: str) -> int:
@@ -123,7 +150,8 @@ class Bm25Encoder:
         return _sparse({t: tf * (self.k1 + 1) / (tf + norm) for t, tf in counts.items()})
 
     def encode_query(self, text: str) -> SparseVector:
-        return _sparse({t: self.stats.idf(t) for t in set(analyze(text)) if self.stats.df[t]})
+        with self.stats._lock:
+            return _sparse({t: self.stats.idf(t) for t in set(analyze(text)) if self.stats.df[t]})
 
 
 def bm25_scores(query: str, docs: list[str], k1: float = 1.2, b: float = 0.75) -> list[float]:

@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from sqlalchemy import select
@@ -137,3 +137,41 @@ def test_bulk_batch_logging(pipeline, caplog):
     ]
     assert [(r.records, r.duplicates, r.chunks) for r in logs] == [(3, 1, 2), (1, 1, 0), (4, 2, 2)]
     assert all(record.duration_ms >= 0 for record in logs)
+
+
+@pytest.mark.parametrize("failure", ["sink", "registry"])
+def test_failed_replacement_keeps_old_version(pipeline, monkeypatch, failure):
+    first = pipeline.ingest(b"Original working document", "x.txt")
+    previous = dict(pipeline.sink.chunks)
+    if failure == "sink":
+
+        def partial(chunks):
+            pipeline.sink.chunks[chunks[0].chunk_id] = chunks[0]
+            raise IngestionError("partial write")
+
+        monkeypatch.setattr(pipeline.sink, "upsert_chunks", partial)
+    else:
+        monkeypatch.setattr(pipeline.registry, "upsert", Mock(side_effect=IngestionError("db")))
+    with pytest.raises(IngestionError):
+        pipeline.ingest(b"Replacement with different content", "x.txt", first.doc_id)
+    assert pipeline.sink.chunks == previous
+    assert pipeline.registry.get(first.doc_id).version == 1
+    with pipeline.registry.session() as session:
+        assert len(list(session.scalars(select(DocumentVersion)))) == 1
+
+
+def test_threaded_writes_and_replacements(pipeline):
+    from concurrent.futures import ThreadPoolExecutor
+
+    def lifecycle(index):
+        key = f"doc-{index}"
+        pipeline.ingest(f"original unique {index}".encode(), "x.txt", key)
+        pipeline.ingest(f"replacement unique {index}".encode(), "x.txt", key)
+        if index % 2:
+            pipeline.delete(key)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lifecycle, range(32)))
+    assert len(pipeline.registry.list()) == len(pipeline.lsh.signatures) == 16
+    assert len(pipeline.sink.chunks) == 16
+    assert all(c.version == 2 for c in pipeline.sink.chunks.values())

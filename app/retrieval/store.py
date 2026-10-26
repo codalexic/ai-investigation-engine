@@ -1,7 +1,9 @@
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import wraps
+from threading import RLock
 from time import monotonic, sleep
 from typing import Any, ParamSpec, TypeVar
 from uuid import NAMESPACE_URL, uuid5
@@ -80,7 +82,9 @@ def _guard(method: Callable[P, T]) -> Callable[P, T]:
     @wraps(method)
     def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
         try:
-            return method(*args, **kwargs)
+            lock = getattr(args[0], "_lock", None) if args else None
+            with lock if lock is not None else nullcontext():
+                return method(*args, **kwargs)
         except RetrievalError:
             raise
         except Exception as exc:
@@ -114,6 +118,7 @@ class QdrantStore:
     ) -> None:
         if embedding_batch_size < 1:
             raise RetrievalError("Embedding batch size must be positive")
+        self._lock = RLock()
         self.client, self.collection, self.embedder = client, collection, embedder
         self.bm25, self.stats_repo = bm25, stats_repo
         self.embedding_batch_size = embedding_batch_size
@@ -223,15 +228,40 @@ class QdrantStore:
 
     @_guard
     def delete_document(self, doc_id: str) -> None:
-        chunks = self.get_document_chunks(doc_id)
-        self.client.delete(
-            self.collection,
-            m.FilterSelector(filter=QueryFilters(doc_ids=[doc_id]).to_qdrant()),
-            wait=True,
-        )
+        self._delete_filter(QueryFilters(doc_ids=[doc_id]).to_qdrant())
+
+    @_guard
+    def delete_version(self, doc_id: str, version: int, exclude: bool = False) -> None:
+        condition = m.FieldCondition(key="version", match=m.MatchValue(value=version))
+        filters = QueryFilters(doc_ids=[doc_id]).to_qdrant()
+        if exclude:
+            filters.must_not = [condition]
+        else:
+            filters.must.append(condition)
+        self._delete_filter(filters)
+
+    def _delete_filter(self, filters: m.Filter) -> None:
+        offset = None
+        chunks = []
+        while True:
+            points, offset = self.client.scroll(
+                self.collection, scroll_filter=filters, offset=offset, limit=256, with_payload=True
+            )
+            chunks.extend(points)
+            if offset is None:
+                break
+        self.client.delete(self.collection, m.FilterSelector(filter=filters), wait=True)
         for chunk in chunks:
             self.bm25.stats.remove_document(analyze(chunk.payload["text"]))
         self.stats_repo.save(self.bm25.stats)
+
+    @_guard
+    def update_metadata(self, doc_id: str, metadata: dict) -> None:
+        if metadata.get("created_at") and len(metadata["created_at"]) == 10:
+            metadata = {**metadata, "created_at": metadata["created_at"] + "T00:00:00Z"}
+        self.client.set_payload(
+            self.collection, metadata, points=QueryFilters(doc_ids=[doc_id]).to_qdrant(), wait=True
+        )
 
     @_guard
     def dense_search(
