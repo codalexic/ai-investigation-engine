@@ -4,7 +4,7 @@ from typing import Any
 from app.api.observability import Metrics
 from app.llm.accounting import PRICES
 from app.llm.client import LLMClient
-from app.llm.types import LLMResponse, Message
+from app.llm.types import LLMResponse, Message, StreamResult
 
 
 class MeteredClient:
@@ -33,7 +33,13 @@ class MeteredClient:
         self.record(response)
         return response
 
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
-        yield from self.inner.stream(messages, **kwargs)
-        self.last_response = getattr(self.inner, "last_response", LLMResponse())
-        self.record(self.last_response)
+    def stream(self, messages: list[Message], **kwargs: Any) -> StreamResult:
+        return StreamResult(lambda result: self._stream(messages, result, **kwargs))
+
+    def _stream(
+        self, messages: list[Message], result: StreamResult, **kwargs: Any
+    ) -> Iterator[str]:
+        stream = self.inner.stream(messages, **kwargs)
+        yield from stream
+        result.response = getattr(stream, "response", LLMResponse())
+        self.record(result.response)

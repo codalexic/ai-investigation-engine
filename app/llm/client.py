@@ -16,7 +16,7 @@ from tenacity import (
 
 from app.core.config import Settings
 from app.core.errors import ConfigurationError, LLMError, LLMRateLimitError
-from app.llm.types import LLMResponse, Message, ToolCall, ToolSpec, Usage
+from app.llm.types import LLMResponse, Message, StreamResult, ToolCall, ToolSpec, Usage
 
 
 class LLMClient(Protocol):
@@ -28,7 +28,7 @@ class LLMClient(Protocol):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse: ...
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]: ...
+    def stream(self, messages: list[Message], **kwargs: Any) -> StreamResult: ...
 
 
 class OpenAICompatibleClient:
@@ -47,7 +47,6 @@ class OpenAICompatibleClient:
         self.provider, self.model = provider, model
         self.temperature, self.max_tokens = temperature, max_tokens
         self.max_retries = max_retries
-        self.last_response = LLMResponse(model=model, provider=provider)
         self.http = httpx.Client(
             base_url=base_url.rstrip("/") + "/",
             timeout=timeout,
@@ -180,9 +179,15 @@ class OpenAICompatibleClient:
         ) as exc:
             raise self._error(exc) from exc
 
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
+    def stream(self, messages: list[Message], **kwargs: Any) -> StreamResult:
+        return StreamResult(lambda result: self._stream(messages, result, **kwargs))
+
+    def _stream(
+        self, messages: list[Message], result: StreamResult, **kwargs: Any
+    ) -> Iterator[str]:
         emitted = False
-        self.last_response = LLMResponse(model=self.model, provider=self.provider)
+        terminal = False
+        result.response = LLMResponse(model=self.model, provider=self.provider)
         try:
             for attempt in self._retry():
                 with (
@@ -207,16 +212,20 @@ class OpenAICompatibleClient:
                                 return
                             data = json.loads(payload)
                             if data.get("usage"):
-                                self.last_response = LLMResponse(
+                                result.response = LLMResponse(
                                     usage=Usage.model_validate(data["usage"]),
                                     model=data.get("model", self.model),
                                     provider=self.provider,
                                 )
                             for choice in data.get("choices", []):
+                                terminal = terminal or choice.get("finish_reason") is not None
                                 text = choice.get("delta", {}).get("content")
                                 if text:
                                     emitted = True
                                     yield text
+                        if not terminal:
+                            raise LLMError("stream ended unexpectedly")
+                        return
                     except httpx.TimeoutException as exc:
                         if emitted:
                             raise LLMError(f"{self.provider}: interrupted stream") from exc
@@ -240,7 +249,11 @@ class FallbackClient:
         self.model = getattr(clients[0], "model", "") if clients else ""
 
     def _run(
-        self, method: str, messages: list[Message], kwargs: dict[str, Any]
+        self,
+        method: str,
+        messages: list[Message],
+        kwargs: dict[str, Any],
+        result: StreamResult | None = None,
     ) -> Iterator[LLMResponse | str]:
         error = LLMError("All provider circuits are open")
         emitted = False
@@ -253,7 +266,8 @@ class FallbackClient:
                     for delta in value:
                         emitted = True
                         yield delta
-                    self.last_response = getattr(client, "last_response", LLMResponse())
+                    if result is not None:
+                        result.response = getattr(value, "response", LLMResponse())
                 else:
                     self.failures[index] = 0
                     yield value
@@ -286,8 +300,8 @@ class FallbackClient:
             )
         )
 
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
-        yield from self._run("stream", messages, kwargs)
+    def stream(self, messages: list[Message], **kwargs: Any) -> StreamResult:
+        return StreamResult(lambda result: self._run("stream", messages, kwargs, result))
 
 
 def build_llm(settings: Settings, model_override: str | None = None) -> LLMClient:
