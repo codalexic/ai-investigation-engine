@@ -33,5 +33,9 @@ def build_retrieval(settings: Settings, engine: Engine) -> tuple[QdrantStore, Hy
         repository,
         settings.embedding_batch_size,
     )
-    store.ensure_collection()
+    try:
+        store.ensure_collection()
+    except Exception:
+        store.client.close()
+        raise
     return store, HybridRetriever(store, embedder, bm25, reranker, settings)

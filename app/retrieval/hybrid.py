@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date
 from time import perf_counter
@@ -77,6 +78,7 @@ class HybridRetriever:
     ) -> None:
         self.store, self.embedder, self.bm25, self.reranker = store, embedder, bm25, reranker
         self.config = RetrievalConfig.from_settings(settings)
+        self.observe: Callable[[str, float], None] | None = None
 
     def search(
         self,
@@ -181,6 +183,9 @@ class HybridRetriever:
         ranked = cap_per_document(ranked, cfg.max_chunks_per_doc)[: cfg.top_k]
         timings["mmr"] = (perf_counter() - stage) * 1000
         timings["total"] = (perf_counter() - started) * 1000
+        if self.observe:
+            for stage, duration in timings.items():
+                self.observe(stage, duration / 1000)
         return RetrievalResult(
             [
                 RetrievedChunk(
