@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.13"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -17,6 +17,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "fastembed" },
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "onnxruntime" },
@@ -60,6 +61,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastembed", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "huggingface-hub", specifier = ">=0.28" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "onnxruntime", specifier = ">=1.20" },
     { name = "orjson", specifier = ">=3.10" },
