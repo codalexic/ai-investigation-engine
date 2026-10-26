@@ -11,7 +11,7 @@ from app.agent.synthesizer import AnswerMetadata, Claim, Synthesizer
 from app.agent.verifier import Verifier
 from app.core.config import Settings
 from app.core.errors import LLMError
-from app.llm.types import LLMResponse, ToolCall, Usage
+from app.llm.types import LLMResponse, StreamResult, ToolCall, Usage
 from app.retrieval.hybrid import RetrievalResult, RetrievedChunk
 
 
@@ -59,9 +59,12 @@ class FakeLLM:
         return response
 
     def stream(self, messages, **kwargs):
+        return StreamResult(lambda result: self._stream(messages, result, **kwargs))
+
+    def _stream(self, messages, result, **kwargs):
         self.messages.append(messages)
         yield from self.answer
-        self.last_response = LLMResponse(usage=Usage(completion_tokens=20), provider="fake")
+        result.response = LLMResponse(usage=Usage(completion_tokens=20), provider="fake")
 
 
 def test_evidence():
@@ -144,7 +147,7 @@ def test_verifier_thresholds():
     metadata.insufficient_information = True
     metadata.missing = ["final review"]
     report = Verifier(FakeNli(), Settings(_env_file=None)).verify("ok", metadata, evidence)
-    assert report.answer == "ok"
+    assert report.answer == "ok _(unverified)_"
 
 
 def test_metadata_repair():
@@ -288,5 +291,106 @@ def test_joint_support_and_partial_abstention():
         Verifier(nli, Settings(_env_file=None))
         .verify("Need a final review [E1].", metadata, evidence)
         .answer
-        == "Need a final review [E1]."
+        == "Need a final review [E1]. _(unverified)_"
     )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_citations_only_when_nli_disabled_or_missing(enabled):
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    report = Verifier(None, Settings(_env_file=None, nli_enabled=enabled)).verify(
+        "payment-service rollback succeeded [E1].", AnswerMetadata(), evidence
+    )
+    assert not report.abstained
+    assert report.verification_mode == "citations_only"
+    report = Verifier(None, Settings(_env_file=None, nli_enabled=enabled)).verify(
+        "payment-service rollback succeeded.", AnswerMetadata(), evidence
+    )
+    assert report.abstained
+
+
+@pytest.mark.parametrize("supported,total,abstained", [(1, 2, True), (3, 5, False), (2, 3, False)])
+def test_answer_sentence_coverage_and_strict_ratio(supported, total, abstained):
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    nli = Mock()
+    nli.predict_batch.side_effect = lambda pairs: [
+        {"entailment": float("supported" in hypothesis), "contradiction": 0}
+        for premise, hypothesis in pairs
+    ]
+    sentences = [f"Fact supported {i} [E1]." for i in range(supported)]
+    sentences += [f"Fabrication {i} [E1]." for i in range(total - supported)]
+    report = Verifier(nli, Settings(_env_file=None)).verify(
+        " ".join(sentences), AnswerMetadata(), evidence
+    )
+    assert report.abstained == abstained
+    assert len(report.metadata.claims) == total
+    assert len(report.unsupported_sentences) == total - supported
+    if not abstained:
+        assert report.answer.count("_(unverified)_") == total - supported
+
+
+def test_uncited_direct_answer_abstains_even_with_supported_metadata():
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    metadata = AnswerMetadata(
+        claims=[Claim(text="payment-service rollback succeeded", evidence=["E1"]) for _ in range(8)]
+    )
+    report = Verifier(FakeNli(), Settings(_env_file=None)).verify(
+        "An invented direct answer. payment-service rollback succeeded [E1].", metadata, evidence
+    )
+    assert report.abstained
+    assert "An invented direct answer." in report.unsupported_sentences
+    assert any(
+        c.text == "An invented direct answer." and not c.supported for c in report.metadata.claims
+    )
+
+
+def test_heading_and_hedge_are_not_uncited_claims():
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    report = Verifier(FakeNli(), Settings(_env_file=None)).verify(
+        "## Findings\nThe documents do not say who approved it.\n"
+        "payment-service rollback succeeded [E1].",
+        AnswerMetadata(),
+        evidence,
+    )
+    assert not report.abstained
+    assert len(report.metadata.claims) == 1
+
+
+def test_unavailable_nli_uses_citations_only(caplog):
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    nli = Mock()
+    nli.predict_batch.side_effect = LLMError("model unavailable")
+    report = Verifier(nli, Settings(_env_file=None)).verify(
+        "payment-service rollback succeeded [E1].", AnswerMetadata(), evidence
+    )
+    assert not report.abstained and report.verification_mode == "citations_only"
+    assert "nli_unavailable" in caplog.text
+
+
+def test_citations_after_sentence_punctuation():
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    report = Verifier(FakeNli(), Settings(_env_file=None)).verify(
+        "payment-service rollback succeeded. [E1]", AnswerMetadata(), evidence
+    )
+    assert not report.abstained
+    assert report.metadata.claims[0].evidence == ["E1"]
+
+
+def test_metadata_cannot_pad_answer_support_ratio():
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    metadata = AnswerMetadata(
+        claims=[
+            Claim(text="payment-service rollback succeeded", evidence=["E1"]) for _ in range(10)
+        ]
+    )
+    report = Verifier(FakeNli(), Settings(_env_file=None)).verify(
+        "payment-service rollback succeeded [E1]. An invented conclusion [E1].", metadata, evidence
+    )
+    assert report.abstained

@@ -16,7 +16,7 @@ from app.core.errors import LLMError, LLMRateLimitError, RetrievalError
 from app.core.logging import get_logger
 from app.llm.accounting import UsageTracker
 from app.llm.client import LLMClient
-from app.llm.types import LLMResponse, Message
+from app.llm.types import LLMResponse, Message, StreamResult
 from app.retrieval.hybrid import HybridRetriever, RetrievalConfig
 from app.retrieval.store import QdrantStore, QueryFilters
 
@@ -53,6 +53,7 @@ class Citation(BaseModel):
 
 class InvestigationResult(BaseModel):
     question: str
+    verification_mode: str = "nli"
     cached: bool = False
     answer: str = ""
     abstained: bool = True
@@ -76,10 +77,17 @@ class _TrackedClient:
         self.tracker.record(response)
         return response
 
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
+    def stream(self, messages: list[Message], **kwargs: Any) -> StreamResult:
+        return StreamResult(lambda result: self._stream(messages, result, **kwargs))
+
+    def _stream(
+        self, messages: list[Message], result: StreamResult, **kwargs: Any
+    ) -> Iterator[str]:
         started = perf_counter()
-        yield from self.inner.stream(messages, **kwargs)
-        response = getattr(self.inner, "last_response", LLMResponse())
+        stream = self.inner.stream(messages, **kwargs)
+        yield from stream
+        response = getattr(stream, "response", LLMResponse())
+        result.response = response
         self.tracker.record(
             response.model_copy(update={"latency_ms": (perf_counter() - started) * 1000})
         )
@@ -178,6 +186,7 @@ class InvestigationEngine:
             result = InvestigationResult(
                 question=question,
                 answer=report.answer,
+                verification_mode=report.verification_mode,
                 abstained=report.abstained,
                 claims=report.metadata.claims,
                 contradictions=report.metadata.contradictions,
