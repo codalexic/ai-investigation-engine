@@ -18,16 +18,24 @@ from sqlalchemy import (
     String,
     create_engine,
     select,
+    update,
 )
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.pool import StaticPool
 
 from app.core.errors import DocumentNotFoundError, IngestionError
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class IndexMeta(Base):
+    __tablename__ = "meta"
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[int] = mapped_column(Integer)
 
 
 class DocumentRecord(Base):
@@ -70,6 +78,8 @@ def make_engine(database_url: str) -> Engine:
     url = make_url(database_url)
     if url.get_backend_name() == "sqlite" and url.database not in (None, "", ":memory:"):
         Path(url.database).parent.mkdir(parents=True, exist_ok=True)
+    if url.get_backend_name() == "sqlite" and url.database in (None, "", ":memory:"):
+        return create_engine(url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
     return create_engine(url)
 
 
@@ -81,6 +91,9 @@ class DocumentRegistry:
     def create_all(self) -> None:
         try:
             Base.metadata.create_all(self.engine)
+            with self.session() as session:
+                if session.get(IndexMeta, "index_version") is None:
+                    session.add(IndexMeta(key="index_version", value=0))
         except SQLAlchemyError as exc:
             raise IngestionError("Cannot initialize document registry") from exc
 
@@ -123,11 +136,15 @@ class DocumentRegistry:
         record = DocumentRecord(**record) if isinstance(record, dict) else record
         record.updated_at = datetime.now(UTC)
         with self.session() as session:
-            return session.merge(record)
+            merged = session.merge(record)
+            self._bump(session)
+            return merged
 
     def bulk_upsert(self, records: list[DocumentRecord]) -> None:
         with self.session() as session:
             session.add_all(records)
+            if records:
+                self._bump(session)
             session.add_all(
                 [
                     DocumentVersion(doc_id=r.doc_id, version=r.version, content_hash=r.content_hash)
@@ -140,8 +157,17 @@ class DocumentRegistry:
             record = session.get(DocumentRecord, doc_id)
             if record is None:
                 raise DocumentNotFoundError(doc_id)
+            self._bump(session)
             record.status = "deleted"
             record.updated_at = datetime.now(UTC)
+
+    @staticmethod
+    def _bump(session: Session) -> None:
+        session.execute(
+            update(IndexMeta)
+            .where(IndexMeta.key == "index_version")
+            .values(value=IndexMeta.value + 1)
+        )
 
     def add_version(self, doc_id: str, version: int, content_hash: str) -> None:
         with self.session() as session:

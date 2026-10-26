@@ -35,6 +35,8 @@ def test_lifecycle(pipeline, caplog):
     unchanged = pipeline.update(first.doc_id, b"# Heading\nINC-42 payments-api", "x.md")
     assert unchanged.status == "unchanged" and unchanged.version == 1
     updated = pipeline.update(first.doc_id, b"Entirely different content", "x.txt")
+    assert pipeline.registry.get(first.doc_id).extra["owner"] == "Team"
+    assert pipeline.registry.get(first.doc_id).format == "txt"
     assert updated.status == "updated" and updated.version == 2
     assert all(c.version == 2 for c in pipeline.sink.chunks.values())
     with pipeline.registry.session() as session:

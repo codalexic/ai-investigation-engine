@@ -118,8 +118,10 @@ def test_indexer_end_to_end(tmp_path):
         assert result["counts_per_source"]["hotpotqa"] == 20
         assert registry.get("hotpot:0").doc_type == "encyclopedia"
         assert registry.get("hotpot:0").title == "Title 0"
+        assert registry.get("hotpot:0").extra["origin"] == "seed"
         assert result["counts_per_source"]["synthetic"] == 45
         assert registry.get("syn:runbook-payment-gateway").version == 2
+        assert registry.get("syn:runbook-payment-gateway").extra["origin"] == "seed"
         assert result["near_duplicates"] >= 1
         assert store.count() > 50
         again = index_sources(pipeline, ["hotpotqa", "synthetic"], tmp_path)
