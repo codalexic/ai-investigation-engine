@@ -98,3 +98,23 @@ def test_client_configuration(monkeypatch):
         )
     )
     constructor.assert_called_once_with(url="http://localhost:6333", api_key="secret", timeout=12)
+
+
+def test_bulk_upserts_are_batched_and_consistent(retrieval, chunk):
+    from unittest.mock import patch
+
+    store, _ = retrieval
+    store.bulk = True
+    store.embedding_batch_size = 2
+    chunks = [chunk(key=f"bulk-{i}", index=i, text=f"Unique bulk record {i}") for i in range(5)]
+    with patch.object(store.client, "upsert", wraps=store.client.upsert) as upsert:
+        store.upsert_chunks(chunks)
+        assert [call.kwargs["wait"] for call in upsert.call_args_list] == [
+            False,
+            False,
+            False,
+            True,
+        ]
+    store.finish_bulk()
+    assert store.count() == 5
+    assert not store._pending
