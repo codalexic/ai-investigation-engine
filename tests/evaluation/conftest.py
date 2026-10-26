@@ -6,7 +6,7 @@ from app.agent.engine import InvestigationEngine
 from app.agent.nli import FakeNli
 from app.container import Container
 from app.core.config import Settings
-from app.llm.types import LLMResponse, Usage
+from app.llm.types import LLMResponse, StreamResult, Usage
 
 
 class FakeLLM:
@@ -32,6 +32,9 @@ class FakeLLM:
         )
 
     def stream(self, messages, **kwargs):
+        return StreamResult(lambda result: self._stream(messages, result, **kwargs))
+
+    def _stream(self, messages, result, **kwargs):
         self.calls += 1
         yield "payment-service rollback succeeded [E1]."
         yield (
@@ -44,7 +47,7 @@ class FakeLLM:
             )
             + "</meta>"
         )
-        self.last_response = LLMResponse(
+        result.response = LLMResponse(
             model=self.model, provider="fake", usage=Usage(prompt_tokens=10, completion_tokens=8)
         )
 

@@ -43,8 +43,9 @@ def test_stream_and_chat_cached(container):
     messages = [Message(role="user", content="Q")]
     first = "".join(cached.stream(messages))
     calls = container.llm.calls
-    assert "".join(cached.stream(messages)) == first
-    assert cached.last_response.cached
+    stream = cached.stream(messages)
+    assert "".join(stream) == first
+    assert stream.response.cached
     assert container.llm.calls == calls
     cached.chat(messages)
     cached.chat(messages)
@@ -125,3 +126,21 @@ def test_judge_rejects_invalid_response(sample_questions):
     judge = SimpleNamespace(chat=lambda *a, **k: LLMResponse(content=json.dumps({"score": 0.7})))
     with pytest.raises(LLMError):
         judge_answer(judge, sample_questions[0], "answer")
+
+
+def test_contradiction_requires_two_gold_documents(sample_questions):
+    q = {**sample_questions[0], "category": "contradiction", "gold_doc_ids": ["a", "b"]}
+    result = InvestigationResult(
+        question="Q",
+        citations=[
+            Citation(evidence_id="E1", chunk_id="1", doc_id="a", title="", source="", snippet=""),
+            Citation(
+                evidence_id="E2", chunk_id="2", doc_id="other", title="", source="", snippet=""
+            ),
+        ],
+        contradictions=[Contradiction(description="conflict", evidence=["E1", "E2"])],
+    )
+    assert score(q, result, None)["contradiction_detection_rate"] == 0
+    result.citations[1].doc_id = "b"
+    assert score(q, result, None)["contradiction_detection_rate"] == 1
+    assert score({**q, "gold_doc_ids": ["a"]}, result, None)["contradiction_detection_rate"] == 1
