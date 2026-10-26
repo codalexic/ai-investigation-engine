@@ -13,4 +13,4 @@ data/
 .coverage
 htmlcov/
 eval/cache/
-.pytest_tmp/
+.pytest_tmp*/
