@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,24 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     llm_primary_model: str = "llama-3.3-70b-versatile"
     llm_fallback_model: str = "gemini-2.0-flash"
+    llm_provider_order: list[str] = ["groq", "gemini"]
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    openrouter_api_key: SecretStr | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    llm_temperature: float = 0.1
+    llm_max_output_tokens: int = Field(default=1200, ge=1)
+    llm_max_retries: int = Field(default=4, ge=0)
+    llm_context_budget_tokens: int = Field(default=6000, ge=1)
+    llm_cache_enabled: bool = True
+    agent_max_steps: int = Field(default=5, ge=0)
+    agent_max_tool_calls: int = Field(default=10, ge=0)
+    nli_model: str = "Xenova/nli-deberta-v3-xsmall"
+    nli_enabled: bool = True
+    support_threshold: float = Field(default=0.5, ge=0, le=1)
+    contradiction_threshold: float = Field(default=0.8, ge=0, le=1)
+    abstain_min_evidence_score: float = 0.0
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     chunk_strategy: Literal["structure", "fixed"] = "structure"
