@@ -132,6 +132,10 @@ class QdrantStore:
                 },
                 sparse_vectors_config={"bm25": m.SparseVectorParams()},
             )
+        self.ensure_payload_indexes(self.client, self.collection)
+
+    @staticmethod
+    def ensure_payload_indexes(client: QdrantClient, collection: str) -> None:
         for key in [
             "doc_id",
             "doc_type",
@@ -139,10 +143,8 @@ class QdrantStore:
             "entities.change_ids",
             "entities.incident_ids",
         ]:
-            self.client.create_payload_index(self.collection, key, m.PayloadSchemaType.KEYWORD)
-        self.client.create_payload_index(
-            self.collection, "created_at", m.PayloadSchemaType.DATETIME
-        )
+            client.create_payload_index(collection, key, m.PayloadSchemaType.KEYWORD)
+        client.create_payload_index(collection, "created_at", m.PayloadSchemaType.DATETIME)
 
     @staticmethod
     def _point_id(chunk_id: str) -> str:
