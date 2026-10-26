@@ -160,3 +160,5 @@ for the architecture, secrets handling, free-tier limits and costs.
   which is an approximation.
 - Abstention thresholds were tuned by hand on the evaluation set.
 - Free-tier LLM quotas bound throughput; the app degrades to cached answers or abstention rather than failing.
+
+Run the app with a single worker process. The LSH index, BM25 statistics snapshot, and rate limiter are process-local; multiple workers cannot keep them consistent. The Dockerfile runs one worker. Keep WEB_CONCURRENCY and UVICORN_WORKERS set to 1.
