@@ -31,6 +31,18 @@ generator's context budget, cost and the NLI verifier's 512-token window all fav
 chunking remains the default; the rank gap points at its weakness — sections shorter than the minimum get merged with
 neighbours, which occasionally dilutes a chunk.
 
+### Performance at full scale
+
+Measured on the 67k-point index (laptop CPU, 12 threads, local Qdrant). Without reranking the retrieval path is cheap:
+dense p50 23 ms / 40 QPS, BM25 19 ms / 47 QPS, hybrid 36 ms / 28 QPS at concurrency 1, and throughput grows up to
+~32–64 QPS at concurrency 4–8 while p95 stays under 300 ms. Qdrant search itself is 15–17 ms; fusion, boosts and MMR add
+under 10 ms. The cross-encoder changes the picture completely: ~0.85 s p50 and ~1 QPS, and because ONNX inference already
+uses every core, concurrency only adds queueing (p99 28 s at concurrency 8). Reranking is therefore the component that
+decides capacity: it buys +5 points of MRR on HotpotQA (0.881 → 0.933) at ~25× the latency. On 2 shared vCPUs (the free
+Space) it is the first thing to tune — fewer rerank candidates (`RERANK_TOP_N`), a quantised model, or skipping the rerank
+when the fused ranking is already confident. Indexing throughput was 12.3 records/s (66,795 records, 66,995 chunks in
+90 minutes), dominated by CPU embedding; it is a one-off cost because the index is migrated to the cloud, never rebuilt there.
+
 ### Where retrieval fails and why
 
 1. **Second-hop documents are invisible to single-shot retrieval.** The weakest category is multi-hop (Recall@10
