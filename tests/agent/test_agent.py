@@ -147,7 +147,7 @@ def test_verifier_thresholds():
     metadata.insufficient_information = True
     metadata.missing = ["final review"]
     report = Verifier(FakeNli(), Settings(_env_file=None)).verify("ok", metadata, evidence)
-    assert report.answer == "ok _(unverified)_"
+    assert report.answer == "ok"  # a two-letter fragment is not a claim, so it is not marked
 
 
 def test_metadata_repair():
@@ -258,6 +258,7 @@ def test_sentence_contradictions_and_versions():
         .verify("answer", AnswerMetadata(), evidence)
         .metadata.contradictions
     )
+    evidence.items["E2"].chunk.doc_id = "other"
     nli.reset_mock()
     Verifier(nli, Settings(_env_file=None)).verify("answer", report.metadata, evidence)
     assert nli.predict_batch.call_args_list[-1].args[0] == []
@@ -394,3 +395,41 @@ def test_metadata_cannot_pad_answer_support_ratio():
         "payment-service rollback succeeded [E1]. An invented conclusion [E1].", metadata, evidence
     )
     assert report.abstained
+
+
+def test_investigator_sends_only_latest_results():
+    from app.agent.investigator import Investigator
+    from app.agent.planner import Plan
+    from app.agent.tools import InvestigationTools
+    from app.llm.tokens import count_tokens
+
+    evidence = EvidenceStore()
+    retriever = Mock()
+    retriever.search.return_value = RetrievalResult([chunk(text="initial evidence")])
+    tools = InvestigationTools(retriever, Mock(), evidence)
+    llm = FakeLLM(
+        [
+            LLMResponse(
+                tool_calls=[ToolCall(id="a", name="search_documents", arguments={"query": "next"})]
+            ),
+            LLMResponse(
+                tool_calls=[ToolCall(id="b", name="search_documents", arguments={"query": "last"})]
+            ),
+            LLMResponse(content="ready"),
+        ]
+    )
+    original = tools.execute
+
+    def execute(name, arguments):
+        result = original(name, arguments)
+        return result + " UNIQUE_" + arguments["query"]
+
+    tools.execute = execute
+    list(Investigator(llm, tools, Settings(_env_file=None)).run("initial", Plan(), []))
+    assert "UNIQUE_initial" in llm.messages[0][1].content
+    assert "UNIQUE_initial" not in str(llm.messages[1])
+    assert "UNIQUE_next" in str(llm.messages[1])
+    assert "UNIQUE_next" not in str(llm.messages[2])
+    assert "UNIQUE_last" in str(llm.messages[2])
+    assert "E1: Incident" in llm.messages[2][1].content
+    assert sum(count_tokens(str(messages)) for messages in llm.messages) < 7000

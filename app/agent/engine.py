@@ -167,14 +167,14 @@ class InvestigationEngine:
             stage = perf_counter()
             synthesizer = Synthesizer(llm)
             for delta in synthesizer.stream(
-                question, evidence.render(self.settings.llm_context_budget_tokens)
+                question, evidence.render(self.settings.llm_context_budget_tokens, question)
             ):
                 yield AgentEvent(event="answer_delta", data=delta)
             timings["synthesis"] = (perf_counter() - stage) * 1000
             trace.append({"stage": "synthesis", "latency_ms": timings["synthesis"]})
             stage = perf_counter()
             report = Verifier(self.nli, self.settings).verify(
-                synthesizer.answer, synthesizer.metadata, evidence
+                synthesizer.answer, synthesizer.metadata, evidence, question=question
             )
             timings["verification"] = (perf_counter() - stage) * 1000
             trace.append({"stage": "verification", "latency_ms": timings["verification"]})
@@ -212,11 +212,16 @@ class InvestigationEngine:
         except LLMRateLimitError:
             raise
         except (LLMError, RetrievalError) as exc:
-            get_logger(__name__).warning("investigation_failed error_type=%s", type(exc).__name__)
+            get_logger(__name__).warning(
+                "investigation_failed error_type=%s error=%s", type(exc).__name__, str(exc)[:300]
+            )
             result.error = "Investigation failed: a provider or retrieval service was unavailable."
             result.answer = "Insufficient information: the investigation could not be completed."
             result.missing = ["Available evidence and a successful provider response."]
             yield AgentEvent(event="error", data={"error": result.error})
         result.trace, result.usage = trace, tracker.snapshot()
+        get_logger(__name__).info(
+            "investigation_usage total_tokens=%s", tracker.prompt_tokens + tracker.completion_tokens
+        )
         result.timings_ms = {**timings, "total": (perf_counter() - started) * 1000}
         yield AgentEvent(event="final", data=result)

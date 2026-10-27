@@ -14,13 +14,14 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 
+from app.agent.textnorm import DASHES
 from app.core.config import get_settings
 from app.core.errors import IngestionError, UnsupportedFormatError
 from app.ingest.models import ParsedDocument, Section
 
 
 def normalize_text(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text).replace("\x00", "")
+    text = unicodedata.normalize("NFKC", text.translate(DASHES)).replace("\x00", "")
     text = "\n".join(line.rstrip() for line in text.splitlines())
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 

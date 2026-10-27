@@ -132,7 +132,7 @@ def test_build():
 
 
 def test_cache_and_accounting():
-    inner = Mock(model="llama-3.3-70b-versatile")
+    inner = Mock(model="openai/gpt-oss-120b")
     inner.chat.return_value = LLMResponse(
         model=inner.model, usage=Usage(prompt_tokens=100, completion_tokens=10)
     )
@@ -144,7 +144,7 @@ def test_cache_and_accounting():
     tracker.record(second)
     assert not first.cached and second.cached and inner.chat.call_count == 1
     assert tracker.snapshot()["cache_hits"] == 1
-    assert tracker.estimated_cost == pytest.approx((59 + 7.9) / 1_000_000)
+    assert tracker.estimated_cost == pytest.approx((15 + 6) / 1_000_000)
     llm.chat(MESSAGES, max_tokens=2)
     assert inner.chat.call_count == 2
     engine.dispose()
@@ -263,3 +263,190 @@ def test_overlapping_stream_accounting_is_per_call():
     assert a.response.usage.completion_tokens == 1
     assert b.response.usage.completion_tokens == 2
     assert metrics.tokens.labels("test", "model", "completion")._value.get() == 3
+
+
+@pytest.mark.parametrize(
+    "provider,model,expected",
+    [
+        ("groq", "openai/gpt-oss-20b", {"reasoning_effort": "low", "reasoning_format": "hidden"}),
+        ("gemini", "gemini-3.5-flash-lite", {"reasoning_effort": "low"}),
+        ("groq", "llama-3.3-70b", {}),
+        ("openrouter", "other", {}),
+    ],
+)
+def test_reasoning_capabilities(provider, model, expected):
+    bodies = []
+
+    def handle(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=payload())
+
+    llm = OpenAICompatibleClient(
+        provider, "https://example.test", "key", model, transport=httpx.MockTransport(handle)
+    )
+    llm.chat(MESSAGES)
+    assert {k: v for k, v in bodies[0].items() if k.startswith("reasoning_")} == expected
+    llm.close()
+
+
+@pytest.mark.parametrize("reset,seconds", [("3.57s", 3.57), ("1m2.5s", 62.5)])
+def test_header_token_throttle(monkeypatch, reset, seconds):
+    monkeypatch.setattr("app.llm.client.monotonic", lambda: 100)
+    sleep = Mock()
+    monkeypatch.setattr("app.llm.client.sleep", sleep)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json=payload(),
+            headers={
+                "x-ratelimit-remaining-tokens": "5",
+                "x-ratelimit-reset-tokens": reset,
+                "x-ratelimit-remaining-requests": "10",
+                "x-ratelimit-reset-requests": "1h",
+            },
+        )
+
+    llm = client(handle)
+    llm.chat(MESSAGES)
+    if seconds > 15:
+        with pytest.raises(LLMRateLimitError) as error:
+            llm.chat(MESSAGES)
+        assert error.value.retry_after == seconds
+        assert len(calls) == 1
+        sleep.assert_not_called()
+    else:
+        llm.chat(MESSAGES)
+        sleep.assert_called_once_with(pytest.approx(seconds))
+    llm.close()
+
+
+@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_long_retry_after_falls_back(status, streaming):
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(status, headers={"Retry-After": "60"})
+
+    first = client(handle)
+    second = Mock(model="backup")
+    second.chat.return_value = LLMResponse(content="backup")
+    second.stream.return_value = StreamResult(lambda result: iter(["backup"]))
+    chain = FallbackClient([first, second])
+    assert (
+        "".join(chain.stream(MESSAGES)) if streaming else chain.chat(MESSAGES).content
+    ) == "backup"
+    assert len(calls) == 1
+    first.close()
+
+
+@pytest.mark.parametrize("status", [404, 503])
+def test_judge_model_fallback(status):
+    settings = Settings(
+        _env_file=None, gemini_api_key="key", llm_provider_order=["gemini"], llm_cache_enabled=False
+    )
+    chain = build_llm(settings, judge=True)
+    models = []
+
+    def handle(request):
+        model = json.loads(request.content)["model"]
+        models.append(model)
+        return httpx.Response(status if model == settings.llm_judge_model else 200, json=payload())
+
+    for item in chain.clients:
+        item.http.close()
+        item.http = httpx.Client(
+            base_url="https://example.test/", transport=httpx.MockTransport(handle)
+        )
+    assert chain.chat(MESSAGES).content == "ok"
+    assert models == ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+    for item in chain.clients:
+        item.close()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_request_header_throttle(monkeypatch, streaming):
+    monkeypatch.setattr("app.llm.client.monotonic", lambda: 100)
+    slept = Mock()
+    monkeypatch.setattr("app.llm.client.sleep", slept)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json=payload(),
+            headers={"x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "5s"},
+        )
+
+    llm = client(handle)
+    llm.chat(MESSAGES)
+    if streaming:
+        # The response body is irrelevant to checking the pre-request wait.
+        with pytest.raises(LLMError):
+            list(llm.stream(MESSAGES))
+    else:
+        llm.chat(MESSAGES)
+    slept.assert_called_once_with(5)
+    assert len(calls) == 2
+    llm.close()
+
+
+def test_preflight_long_reset_uses_next_provider(monkeypatch):
+    monkeypatch.setattr("app.llm.client.monotonic", lambda: 100)
+    first = client(
+        lambda request: httpx.Response(
+            200,
+            json=payload(),
+            headers={"x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "1m2.5s"},
+        )
+    )
+    first.chat(MESSAGES)
+    backup = Mock(model="backup")
+    backup.chat.return_value = LLMResponse(content="backup")
+    chain = FallbackClient([first, backup])
+    assert chain.chat(MESSAGES).content == "backup"
+    assert chain.open_until[0] == 162.5
+    first.close()
+
+
+@pytest.mark.parametrize(
+    "model,rates", [("gemini-3.5-flash-lite", (0.10, 0.40)), ("gemini-3.8-flash", (0.30, 2.50))]
+)
+def test_reference_prices(model, rates):
+    tracker = UsageTracker()
+    tracker.record(LLMResponse(model=model, usage=Usage(prompt_tokens=100, completion_tokens=20)))
+    assert tracker.estimated_cost == pytest.approx((100 * rates[0] + 20 * rates[1]) / 1_000_000)
+
+
+def test_tool_call_extra_content_round_trip():
+    signature = {"google": {"thought_signature": "sig"}}
+    seen = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        if len(seen) == 1:
+            call = {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "search", "arguments": '{"q": "x"}'},
+                "extra_content": signature,
+            }
+            return httpx.Response(200, json=payload(None, tool_calls=[call]))
+        assert body["messages"][-2]["tool_calls"][0]["extra_content"] == signature
+        return httpx.Response(200, json=payload("done"))
+
+    llm = client(handle)
+    first = llm.chat(MESSAGES)
+    assert first.tool_calls[0].extra_content == signature
+    follow_up = [
+        *MESSAGES,
+        Message(role="assistant", tool_calls=first.tool_calls),
+        Message(role="tool", content="result", tool_call_id="c1"),
+    ]
+    assert llm.chat(follow_up).content == "done"

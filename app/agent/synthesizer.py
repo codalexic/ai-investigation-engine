@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from app.agent.prompts import SYNTHESIZER
+from app.agent.textnorm import normalized_deltas
 from app.core.errors import LLMError
 from app.llm.client import LLMClient
 from app.llm.jsonutil import extract_json
@@ -13,8 +14,11 @@ from app.llm.types import Message
 class Claim(BaseModel):
     text: str
     evidence: list[str] = Field(default_factory=list)
+    kind: Literal["factual", "citation", "excluded"] = "factual"
     support_score: float = 0
     supported: bool = False
+    support_method: Literal["nli", "grounding"] | None = None
+    grounding_score: float = 0
 
 
 class Contradiction(BaseModel):
@@ -38,6 +42,11 @@ class Synthesizer:
         self.answer = ""
 
     def stream(self, question: str, evidence: str) -> Iterator[str]:
+        self.answer = ""
+        yield from normalized_deltas(self._stream(question, evidence))
+        self.answer = "".join(normalized_deltas([self.answer]))
+
+    def _stream(self, question: str, evidence: str) -> Iterator[str]:
         messages = [
             Message(role="system", content=SYNTHESIZER),
             Message(role="user", content=question + "\n" + evidence),

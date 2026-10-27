@@ -46,14 +46,14 @@ def test_metrics_isolated_and_accounted():
     inner = Mock()
     inner.chat.return_value = LLMResponse(
         provider="test",
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         usage=Usage(prompt_tokens=10, completion_tokens=5),
     )
     client = MeteredClient(inner, metrics)
     client.chat([])
-    assert metrics.calls.labels("test", "llama-3.3-70b-versatile")._value.get() == 1
-    assert metrics.cost.labels("test", "llama-3.3-70b-versatile")._value.get() > 0
-    assert other.calls.labels("test", "llama-3.3-70b-versatile")._value.get() == 0
+    assert metrics.calls.labels("test", "openai/gpt-oss-120b")._value.get() == 1
+    assert metrics.cost.labels("test", "openai/gpt-oss-120b")._value.get() > 0
+    assert other.calls.labels("test", "openai/gpt-oss-120b")._value.get() == 0
     client.record(inner.chat.return_value.model_copy(update={"cached": True}))
     assert metrics.cache_hits.labels("llm")._value.get() == 1
 
@@ -146,7 +146,8 @@ def test_answer_cache_fingerprints_generation_and_verification(api_client):
         "nli_enabled": False,
         "nli_model": "other",
         "support_threshold": 0.9,
-        "contradiction_threshold": 0.9,
+        "contradiction_threshold": 0.95,
+        "nli_window_top_k": 3,
         "abstain_min_evidence_score": 0.5,
         "agent_max_steps": 9,
     }.items():
