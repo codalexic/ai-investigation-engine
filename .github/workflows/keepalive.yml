@@ -1,0 +1,19 @@
+name: Keep Space awake
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 */2 * *'
+permissions: {}
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Touch Space and persistent stores
+        env:
+          SPACE_URL: ${{ vars.SPACE_URL }}
+        run: |
+          if [ -z "$SPACE_URL" ]; then
+            echo "SPACE_URL is unset; skipping keepalive."
+          elif ! curl --fail --show-error --max-time 180 --retry 2 "$SPACE_URL/ready"; then
+            echo "Keepalive failed: Space or a database may still be waking; inspect readiness manually."
+          fi

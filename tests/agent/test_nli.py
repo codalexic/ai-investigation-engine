@@ -10,14 +10,16 @@ from app.agent.nli import OnnxNliModel
 from app.core.errors import LLMError
 
 
-def test_lazy_load_batch_and_label_order(monkeypatch, tmp_path):
+@pytest.mark.parametrize("cache_dir", [None, "model-cache"])
+def test_lazy_load_batch_and_label_order(monkeypatch, tmp_path, cache_dir):
     config = tmp_path / "config.json"
     config.write_text(
         json.dumps({"id2label": {"0": "neutral", "1": "contradiction", "2": "entailment"}})
     )
     downloads = []
 
-    def download(model, filename):
+    def download(model, filename, **options):
+        assert options == ({"cache_dir": cache_dir} if cache_dir else {})
         downloads.append(filename)
         if filename.endswith("model_quantized.onnx"):
             raise EntryNotFoundError("missing")
@@ -37,7 +39,7 @@ def test_lazy_load_batch_and_label_order(monkeypatch, tmp_path):
     session.run.return_value = [np.array([[0.0, 0.0, 4.0], [0.0, 4.0, 0.0]])]
     factory = Mock(return_value=session)
     monkeypatch.setattr("onnxruntime.InferenceSession", factory)
-    model = OnnxNliModel("test")
+    model = OnnxNliModel("test", cache_dir)
     assert not downloads
     predictions = model.predict_batch([("premise", "hypothesis"), ("other", "claim")])
     assert predictions[0]["entailment"] > 0.9 and predictions[1]["contradiction"] > 0.9

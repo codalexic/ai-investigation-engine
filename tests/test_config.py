@@ -10,6 +10,9 @@ def test_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.model_dump() == {
         "app_env": "local",
+        "model_cache_dir": None,
+        "warmup": None,
+        "hf_token": None,
         "log_level": "INFO",
         "qdrant_url": ":memory:",
         "qdrant_api_key": None,

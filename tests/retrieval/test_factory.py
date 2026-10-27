@@ -17,8 +17,10 @@ def test_normal_factory_uses_configured_models(monkeypatch):
     monkeypatch.setattr("app.retrieval.factory.Bm25StatsRepository", Mock())
     settings = Settings(_env_file=None, query_cache_size=17, embedding_batch_size=12)
     store, retriever = build_retrieval(settings, Mock())
-    embedding_constructor.assert_called_once_with(settings.embedding_model, 12, query_cache_size=17)
-    reranking_constructor.assert_called_once_with(settings.reranker_model)
+    embedding_constructor.assert_called_once_with(
+        settings.embedding_model, 12, query_cache_size=17, cache_dir=None
+    )
+    reranking_constructor.assert_called_once_with(settings.reranker_model, cache_dir=None)
     store.ensure_collection.assert_called_once_with()
     assert retriever.store is store
     assert retriever.config.candidate_k == settings.candidate_k

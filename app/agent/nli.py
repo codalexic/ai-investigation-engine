@@ -4,6 +4,7 @@ from typing import Protocol
 
 import numpy as np
 
+from app.core.config import get_settings
 from app.core.errors import LLMError
 
 
@@ -14,27 +15,33 @@ class NliModel(Protocol):
 
 
 class OnnxNliModel:
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, cache_dir: str | None = None) -> None:
         self.model_id = model_id
+        self.cache_dir = cache_dir if cache_dir is not None else get_settings().model_cache_dir
         self.session = None
 
     def _load(self) -> None:
         if self.session is not None:
             return
         from huggingface_hub import hf_hub_download
-        from huggingface_hub.errors import EntryNotFoundError
+        from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
         from onnxruntime import InferenceSession
         from tokenizers import Tokenizer
 
+        options = {"cache_dir": self.cache_dir} if self.cache_dir else {}
         try:
             try:
-                path = hf_hub_download(self.model_id, "onnx/model_quantized.onnx")
-            except EntryNotFoundError:
-                path = hf_hub_download(self.model_id, "onnx/model.onnx")
-            tokenizer = Tokenizer.from_file(hf_hub_download(self.model_id, "tokenizer.json"))
+                path = hf_hub_download(self.model_id, "onnx/model_quantized.onnx", **options)
+            except (EntryNotFoundError, LocalEntryNotFoundError):
+                path = hf_hub_download(self.model_id, "onnx/model.onnx", **options)
+            tokenizer = Tokenizer.from_file(
+                hf_hub_download(self.model_id, "tokenizer.json", **options)
+            )
             tokenizer.enable_truncation(max_length=512)
             tokenizer.enable_padding()
-            with open(hf_hub_download(self.model_id, "config.json"), encoding="utf-8") as file:
+            with open(
+                hf_hub_download(self.model_id, "config.json", **options), encoding="utf-8"
+            ) as file:
                 config = json.load(file)
             labels = {int(k): v.lower() for k, v in config["id2label"].items()}
             if set(labels.values()) != {"entailment", "neutral", "contradiction"}:

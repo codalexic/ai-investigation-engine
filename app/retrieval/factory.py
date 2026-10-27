@@ -16,12 +16,13 @@ def build_retrieval(settings: Settings, engine: Engine) -> tuple[QdrantStore, Hy
             settings.embedding_model,
             settings.embedding_batch_size,
             query_cache_size=settings.query_cache_size,
+            cache_dir=settings.model_cache_dir,
         )
     )
     reranker = (
         FakeReranker()
         if settings.app_env == "test"
-        else CrossEncoderReranker(settings.reranker_model)
+        else CrossEncoderReranker(settings.reranker_model, cache_dir=settings.model_cache_dir)
     )
     repository = Bm25StatsRepository(engine)
     bm25 = Bm25Encoder(repository.load(), settings.bm25_k1, settings.bm25_b)
