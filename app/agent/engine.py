@@ -46,10 +46,14 @@ class Citation(BaseModel):
     title: str
     source: str
     snippet: str
+    text: str = ""
+    created_at: str | None = None
+    explain: dict[str, Any] = Field(default_factory=dict)
 
 
 class InvestigationResult(BaseModel):
     question: str
+    cached: bool = False
     answer: str = ""
     abstained: bool = True
     citations: list[Citation] = Field(default_factory=list)
@@ -187,6 +191,10 @@ class InvestigationEngine:
                         title=str(evidence.items[key].chunk.payload.get("title", "")),
                         source=str(evidence.items[key].chunk.payload.get("source", "")),
                         snippet=evidence.items[key].chunk.text[:300],
+                        text=evidence.items[key].chunk.text,
+                        created_at=str(evidence.items[key].chunk.payload.get("created_at") or "")
+                        or None,
+                        explain=evidence.items[key].chunk.explain,
                     )
                     for key in evidence.items
                     if key in cited

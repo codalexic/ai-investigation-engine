@@ -159,7 +159,8 @@ class IngestionPipeline:
         record = self.registry.get(doc_id)
         if record is None or record.status != "active":
             raise DocumentNotFoundError(doc_id)
-        return self.ingest(data, filename, doc_id)
+        metadata = {key: value for key, value in record.extra.items() if key != "format"}
+        return self.ingest(data, filename, doc_id, metadata)
 
     def delete(self, doc_id: str) -> None:
         if self.registry.get(doc_id) is None:

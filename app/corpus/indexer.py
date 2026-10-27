@@ -61,7 +61,9 @@ def index_sources(
                 result = (
                     pipeline.update(key, path.read_bytes(), path.name)
                     if updated
-                    else pipeline.ingest(path.read_bytes(), path.name, key)
+                    else pipeline.ingest(
+                        path.read_bytes(), path.name, key, {"origin": "seed", "dataset": source}
+                    )
                 )
                 if result.chunk_count:
                     active[key] = result.version
@@ -107,6 +109,7 @@ def index_sources(
                         continue
                     if limit is not None and processed + len(batch) >= limit:
                         break
+                    record.setdefault("metadata", {}).update(origin="seed", dataset=source)
                     batch.append(record)
                     if len(batch) >= batch_size:
                         flush()

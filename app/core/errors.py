@@ -28,3 +28,19 @@ class LLMRateLimitError(LLMError):
 
 class ConfigurationError(AppError):
     pass
+
+
+class UploadTooLargeError(AppError):
+    pass
+
+
+class AccessDeniedError(AppError):
+    pass
+
+
+class ServiceUnavailableError(AppError):
+    pass
+
+
+class InvalidRequestError(AppError):
+    pass
