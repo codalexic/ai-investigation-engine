@@ -248,6 +248,10 @@ def _summary(results: list[tuple[str, dict]], counts: Counter) -> list[str]:
 def build(root: Path = Path(".")) -> Path:
     path = root / "eval/questions.jsonl"
     counts = Counter(q["category"] for q in read_jsonl(path)) if path.exists() else Counter()
+    e2e_path = root / "eval/questions_e2e.jsonl"
+    e2e_counts = (
+        Counter(q["category"] for q in read_jsonl(e2e_path)) if e2e_path.exists() else Counter()
+    )
     methodology = [
         "# Evaluation report",
         "## Methodology",
@@ -268,10 +272,15 @@ def build(root: Path = Path(".")) -> Path:
         "MRR, chunk tokens and context tokens to the first hit (misses are "
         "excluded from that mean). "
         "Embedding experiments use only the original contexts of the first N sampled questions.",
-        "End-to-end configurations: full (primary model, gpt-oss-120b), "
-        "no_agent (one retrieval followed by "
-        "synthesis and verification), small_model (gpt-oss-20b), gemini. All use "
-        "hybrid retrieval with reranking. "
+        "End-to-end runs use eval/questions_e2e.jsonl, a fixed "
+        + str(sum(e2e_counts.values()))
+        + "-question subset covering every category: "
+        + json.dumps(dict(sorted(e2e_counts.items())))
+        + ". Configurations: no_agent (one retrieval followed by synthesis and verification, "
+        "gpt-oss-120b), no_agent_gemini (the same pipeline on gemini-3.5-flash-lite) and gemini "
+        "(planner, tool loop, synthesis and verification on gemini-3.5-flash-lite). The two "
+        "Gemini configurations share the generator, so their difference isolates the agent. "
+        "All use hybrid retrieval with reranking. "
         "The automatic judge prefers a different provider from the generator, uses a strict "
         "0/0.5/1 correctness rubric, and checks injection assertions including paraphrases. "
         "Actual judge provider/model and usage are recorded per question; unavailable or disabled "

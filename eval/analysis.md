@@ -51,7 +51,7 @@ when the fused ranking is already confident. Indexing throughput was 12.3 record
    operations page, because the bridge entity (`CHG-1051`, then `ledger-service`) is not in the question. HotpotQA bridge
    questions fail the same way (e.g. the venue of the 2014 FIBA final: the final's page is found, the arena's page is not).
    This is the gap the agent's tool loop is designed to close — it reads the review, extracts `CHG-1051`, and calls
-   `find_related` / `search_documents` for it — and the end-to-end comparison of `full` vs `no_agent` measures exactly that.
+   `find_related` / `search_documents` for it — and the end-to-end comparison of `gemini` vs `no_agent_gemini` below measures exactly that.
 2. **Near-duplicates crowd the context.** The duplicated export of the INC-2031 incident report is correctly flagged at
    ingestion (`duplicate_of`) but still occupies a second slot in the top-5, because the per-document cap works on
    `doc_id`, not on duplicate groups.
@@ -61,6 +61,34 @@ when the fused ranking is already confident. Indexing throughput was 12.3 record
 4. **Tabular sources chunk poorly.** The change-log CSV is chunked as blocks of rows, so one chunk mixes a dozen unrelated
    changes and its embedding is a blur; identifier queries survive only thanks to BM25.
 
+### End-to-end: what the agent buys
+
+`gemini` and `no_agent_gemini` use the same generator (gemini-3.5-flash-lite), the same retrieval and the same verifier;
+the only difference is the planner and tool loop. On the 54 paired questions the agent raises judge correctness from
+0.66 to 0.81, citation recall from 0.78 to 0.85 and faithfulness from 0.78 to 0.82, and cuts the false-abstention rate
+from 0.43 to 0.28. It never answered an unanswerable question (false-answer rate 0 in all configurations) and every
+injection probe was resisted. Per question it wins 14 times and loses 4.
+
+- **Multi-hop is where the gain is.** Judge correctness on multi-hop questions goes from 0.33 to 0.86 and citation recall
+  from 0.55 to 0.88. *"What does the service whose change caused INC-2031 depend on?"* is typical: single-shot retrieval
+  finds only INC-2031 documents and the model correctly abstains; the agent reads the review, picks up `CHG-1042`, follows
+  it to `payment-gateway` and answers *auth-service and ledger-service* with three citations. Most of the non-agentic
+  abstentions (28 vs 21) are this pattern: honest, but avoidable.
+- **Where the agent hurts.** Post-mortem questions drop from 0.62 to 0.25. "What went wrong at Cloudflare?" has several
+  valid incidents in the corpus; more searching surfaces more of them and the answer drifts away from the single gold
+  incident (retrieval failure 3 above, amplified). Two losses are phrasing: *"Both Pleiospilos is a flowering plant"*
+  (half credit) and an answer to a dispute question that cites the dispute but frames the final list less directly.
+- **Cost.** The agent spends 4.2× the tokens (7.9k vs 1.9k per question) and 3.8× the median latency (38 s vs 10 s on
+  the free tier). Simple lookups gain nothing from it (1.00 vs 0.88), which argues for routing: answer directly when the
+  first retrieval already covers every planned entity, and enter the tool loop only when a bridge entity is missing.
+- **Generator vs pipeline.** `no_agent` runs the identical single-shot pipeline on gpt-oss-120b. It lands at 0.63, close
+  to flash-lite (0.66), but abstains far more (false-abstention 0.59) and is faster (p50 3.3 s). It finds more
+  contradictions (0.83 vs 0.50, n = 6): the larger model reports a disagreement it sees in the evidence more readily,
+  whereas flash-lite tends to state the superseding value and drop the older one. Model size changes the style of
+  failure; the agent changes which questions can be answered at all.
+- **Failures counted as failures.** Three questions per Gemini run ended with a transport error from the provider;
+  they are scored as failed answers rather than removed, so both Gemini numbers are slight underestimates.
+
 ### Improvements
 
 - **Retrieval for multi-hop:** query rewriting with entities extracted from first-round evidence (the agent does this; a
@@ -69,6 +97,8 @@ when the fused ranking is already confident. Indexing throughput was 12.3 record
 - **Collapse duplicate groups at query time** by treating `duplicate_of` as the cap key.
 - **Row-level chunking for CSV/JSON records** with the header repeated in each chunk.
 - **Rewrite post-mortem questions** to name the incident (date or system) so they have a single correct answer.
+- **Agent routing:** skip the tool loop when seed retrieval already covers every planned entity; keep it for
+  bridge questions, where it pays for itself.
 - **Latency:** rerank only when the fused score margin between ranks 1 and 10 is small, cache reranker scores per
   (query, chunk), or swap in a smaller cross-encoder; quantised ONNX models would roughly halve CPU time.
 - **Chunking:** tune `chunk_min_tokens` so short sections stay separate, and add the section breadcrumb to the embedded
