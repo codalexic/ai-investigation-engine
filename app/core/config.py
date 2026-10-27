@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +10,8 @@ class Settings(BaseSettings):
         env_prefix="", env_file=".env", env_file_encoding="utf-8", env_ignore_empty=True
     )
 
+    deployment_profile: Literal["full", "lite"] = "full"
+    lsh_rebuild_on_startup: bool = True
     app_env: Literal["local", "prod", "test"] = "local"
     model_cache_dir: str | None = None
     warmup: bool | None = None
@@ -74,6 +76,22 @@ class Settings(BaseSettings):
     answer_cache_ttl_s: int = Field(default=86400, ge=0)
     rate_limit_per_minute: int = Field(default=10, ge=1)
     request_timeout_s: float = 30.0
+
+    @model_validator(mode="after")
+    def resolve_profile(self) -> "Settings":
+        if self.deployment_profile == "lite":
+            defaults = dict(
+                rerank_enabled=False,
+                nli_enabled=False,
+                warmup=False,
+                lsh_rebuild_on_startup=False,
+                embedding_batch_size=8,
+                agent_max_steps=3,
+            )
+            for name, value in defaults.items():
+                if name not in self.model_fields_set:
+                    object.__setattr__(self, name, value)
+        return self
 
     @field_validator("model_cache_dir", "warmup", mode="before")
     @classmethod

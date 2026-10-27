@@ -9,6 +9,8 @@ from app.core.config import Settings, get_settings
 def test_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.model_dump() == {
+        "deployment_profile": "full",
+        "lsh_rebuild_on_startup": True,
         "app_env": "local",
         "model_cache_dir": None,
         "warmup": None,
