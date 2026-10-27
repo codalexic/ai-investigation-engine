@@ -80,7 +80,11 @@ def make_engine(database_url: str) -> Engine:
         Path(url.database).parent.mkdir(parents=True, exist_ok=True)
     if url.get_backend_name() == "sqlite" and url.database in (None, "", ":memory:"):
         return create_engine(url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    return create_engine(url)
+    if url.get_backend_name() == "sqlite":
+        return create_engine(url)
+    # Serverless Postgres suspends idle compute and poolers close idle connections, so stale
+    # pooled connections are checked before use and recycled well within the idle timeout.
+    return create_engine(url, pool_pre_ping=True, pool_recycle=240)
 
 
 class DocumentRegistry:
