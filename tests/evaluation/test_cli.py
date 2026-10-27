@@ -46,8 +46,10 @@ def test_cli_e2e_configurations(container, sample_questions, tmp_path, monkeypat
     monkeypatch.setattr(cli, "connect", lambda settings: nullcontext(container))
     calls = []
 
-    def build_llm(settings):
+    def build_llm(settings, *, judge=False):
         calls.append(settings)
+        if judge and settings.llm_provider_order == ["gemini"]:
+            assert settings.llm_judge_model == "gemini-3.8-flash"
         fake = type(container.llm)()
         fake.model = (
             settings.llm_primary_model
@@ -76,9 +78,10 @@ def test_cli_e2e_configurations(container, sample_questions, tmp_path, monkeypat
         generator, judge = calls[-2:]
         assert generator.llm_provider_order != judge.llm_provider_order
         if config == "small_model":
-            assert generator.llm_primary_model == "llama-3.1-8b-instant"
+            assert generator.llm_primary_model == "openai/gpt-oss-20b"
         if config == "gemini":
             assert generator.llm_provider_order == ["gemini"]
+            assert generator.llm_fallback_model == "gemini-3.5-flash-lite"
         assert (tmp_path / f"eval/results/e2e_{config}.json").exists()
 
 

@@ -80,7 +80,7 @@ Figures as documented by the providers at the time of writing (October 2026); th
 | [Hugging Face Spaces](https://huggingface.co/docs/hub/spaces-overview) (CPU Basic) | 2 vCPU, 16 GB RAM, ephemeral disk | Sleeps after ~48 h without traffic; cold start rebuilds nothing but reloads models | Models baked into the image, lazy loading + background warm-up, keep-alive workflow every 2 days |
 | [Qdrant Cloud](https://qdrant.tech/documentation/cloud/create-cluster/) | 1 node, 1 GB RAM, 0.5 vCPU, 4 GB disk | Suspended after 1 week of inactivity, deleted after 4 weeks | Keep-alive calls `/ready` (touches Qdrant); the local index plus `migrate_to_cloud.py` can restore the cluster without re-embedding |
 | [Neon Postgres](https://neon.com/faqs/free-plan-limits-and-quotas) | 0.5 GB storage per project, 100 CU-hours/month, up to 2 CU | Compute scales to zero after 5 min idle (cold start on first query) | Connection pre-ping and retries; registry rows are small (~1 KB each incl. MinHash) |
-| [Groq](https://console.groq.com/docs/rate-limits) (llama-3.3-70b-versatile) | ≈30 requests/min, ≈1,000 requests/day, ≈12k tokens/min per organisation | One investigation uses 3–8 calls, so roughly 150–300 investigations/day | Fallback to Gemini/OpenRouter, circuit breaker, LLM response cache, answer cache, per-IP rate limit (10/min), abstention instead of errors |
+| [Groq](https://console.groq.com/docs/rate-limits) (openai/gpt-oss-120b) | ≈30 requests/min, ≈1,000 requests/day, ≈12k tokens/min per organisation | One investigation uses 3–8 calls, so roughly 150–300 investigations/day | Fallback to Gemini/OpenRouter, circuit breaker, LLM response cache, answer cache, per-IP rate limit (10/min), abstention instead of errors |
 | [Gemini API](https://ai.google.dev/gemini-api/docs/rate-limits) | Free tier with per-model RPM/RPD limits | Lower throughput; also used as the evaluation judge | Used as fallback generator and as judge (different provider from the generator) |
 
 Hugging Face has been changing free hardware eligibility; some accounts report that new free Docker Spaces need a
@@ -103,10 +103,10 @@ concurrent reranking/NLI, LSH rebuild, Postgres connections and process RSS.
 | Qdrant free cluster | $0 within free-tier limits |
 | Neon free database | $0 within free-tier limits |
 | Infrastructure target | $0 only with eligible HF access and free-tier capacity |
-| Example investigation | 20k input + 3k output tokens at $0.59/$0.79 per million: ≈ $0.014 |
+| Example investigation | 20k input + 3k output tokens at $0.15/$0.60 per million: ≈ $0.005 |
 | Cached answer | No new generation charge on a full answer-cache hit |
 
-The generation example uses Groq's list rates for `llama-3.3-70b-versatile` (the default model) as a paid-tier reference;
+The generation example uses Groq's list rates for `openai/gpt-oss-120b` (the default model) as a paid-tier reference;
 on the free tier the actual charge is $0, and the estimate shows what the same traffic would cost after leaving it. Sum tokens across all planner,
 tool and synthesis calls; retries and fallbacks can raise cost. Free API quotas may
 reduce billed usage to $0. Verify current provider prices and model availability.

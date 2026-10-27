@@ -139,7 +139,7 @@ def e2e_main() -> None:
         update={
             "llm_provider_order": [provider],
             "llm_cache_enabled": False,
-            "llm_primary_model": "llama-3.1-8b-instant"
+            "llm_primary_model": "openai/gpt-oss-20b"
             if args.config == "small_model"
             else settings.llm_primary_model,
         }
@@ -167,7 +167,7 @@ def e2e_main() -> None:
             judge_settings = settings.model_copy(
                 update={"llm_provider_order": [judge_provider], "llm_cache_enabled": False}
             )
-            judge = build_llm(judge_settings)
+            judge = build_llm(judge_settings, judge=True)
             stack.callback(close_llm, judge)
             judge = EvaluationCachedClient(judge, cache_engine)
         else:

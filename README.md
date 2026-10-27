@@ -59,7 +59,7 @@ Design decisions and trade-offs are recorded as ten ADRs in [docs/ARCHITECTURE.m
 | Keyword search | own BM25 encoder | identifiers like `CHG-1042` tokenised correctly; incremental statistics |
 | Embeddings / reranker | `bge-small-en-v1.5`, `ms-marco-MiniLM-L-6-v2` via fastembed (ONNX) | no PyTorch, small image, fast CPU inference |
 | Verification | `nli-deberta-v3-xsmall` (ONNX) | measurable claim support and contradiction signal |
-| LLMs | Groq `llama-3.3-70b-versatile` (primary), Gemini (fallback/judge), OpenRouter | free tiers, OpenAI-compatible tool calling |
+| LLMs | Groq `openai/gpt-oss-120b` (primary), Gemini (fallback/judge), OpenRouter | free tiers, OpenAI-compatible tool calling |
 | Relational store | Postgres (Neon) / SQLite locally, SQLAlchemy 2 | registry, versions, BM25 stats, caches, traces |
 | UI | static HTML + vanilla JS | no build step; served by the API |
 | Hosting | Hugging Face Spaces (Docker), Qdrant Cloud, Neon | all free tiers |

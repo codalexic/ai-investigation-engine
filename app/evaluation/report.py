@@ -268,8 +268,9 @@ def build(root: Path = Path(".")) -> Path:
         "MRR, chunk tokens and context tokens to the first hit (misses are "
         "excluded from that mean). "
         "Embedding experiments use only the original contexts of the first N sampled questions.",
-        "End-to-end configurations: full (primary 70B model), no_agent (one retrieval followed by "
-        "synthesis and verification), small_model (8B), gemini. All use "
+        "End-to-end configurations: full (primary model, gpt-oss-120b), "
+        "no_agent (one retrieval followed by "
+        "synthesis and verification), small_model (gpt-oss-20b), gemini. All use "
         "hybrid retrieval with reranking. "
         "The automatic judge prefers a different provider from the generator, uses a strict "
         "0/0.5/1 correctness rubric, and checks injection assertions including paraphrases. "
