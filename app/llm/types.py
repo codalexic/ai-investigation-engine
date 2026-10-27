@@ -8,6 +8,8 @@ class ToolCall(BaseModel):
     id: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    # Provider data that must be echoed back, e.g. Gemini thought signatures.
+    extra_content: dict[str, Any] | None = None
 
 
 class Message(BaseModel):
