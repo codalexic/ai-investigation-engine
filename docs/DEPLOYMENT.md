@@ -2,19 +2,52 @@
 
 ```mermaid
 flowchart LR
-  Browser --> Space[HF Space: FastAPI + UI + ONNX models]
+  Browser --> Space[Render lite: FastAPI + UI + embeddings]
   Space --> Qdrant[Qdrant Cloud: vectors and payloads]
   Space --> Neon[Neon Postgres: registry, BM25, caches, traces]
   Space --> LLM[LLM APIs]
 ```
 
+## Hosting
+
+The demo uses Render free with the lite profile: 512 MB RAM, 0.1 vCPU, no card.
+See [Render plans](https://render.com/docs/compute-plans) and
+[free service limits](https://render.com/docs/free). It sleeps after 15 minutes idle;
+a new request triggers a cold start, followed by lazy model loading. Expect high
+embedding and investigation latency on 0.1 vCPU.
+
+[HF Docker Spaces](https://huggingface.co/docs/hub/spaces-overview) require PRO for
+personal accounts. [Cloud Run requires a billing account](https://docs.cloud.google.com/billing/docs),
+with a $30 prepayment for some cards during account setup. Full remains the default for hosts
+with at least 2 GB: local Docker, a paid Space, or Cloud Run.
+
+| Setting | Full | Lite |
+| --- | --- | --- |
+| RERANK_ENABLED | true | false |
+| NLI_ENABLED | true | false |
+| WARMUP | production background warm-up | false |
+| LSH_REBUILD_ON_STARTUP | true | false |
+| EMBEDDING_BATCH_SIZE | 64 | 8 |
+| AGENT_MAX_STEPS | 5 | 3 |
+| Verification | NLI plus grounding | grounding |
+
+Set DEPLOYMENT_PROFILE=lite. Explicit env values override each profile default.
+Unset profile-specific variables to use defaults; copying full values from
+.env.example overrides lite defaults. Grounding requires all claim entities in
+cited text and content overlap of 0.5 with entities, otherwise 0.75. Compound
+splitting and abstention remain, without NLI contradiction checking.
+
+HotpotQA n=1,018: hybrid without rerank has Recall@10 0.862 vs 0.874 and MRR@10
+0.881 vs 0.933. These retrieval results do not measure the end-to-end cost of
+removing NLI or reducing agent steps.
+
+Skipping LSH rebuild avoids about 67k signatures (~150 MB, ~45 seconds). The empty
+index only covers documents ingested by this process. Registry hashes still catch
+exact duplicates; near-duplicates against the seed corpus are skipped.
+
 ## First deployment
 
-1. Create Hugging Face, Qdrant Cloud, Neon, and generation-provider accounts. Select
-   Qdrant and Neon free plans. Check eligibility for Docker Spaces before proceeding:
-   [HF currently requires a paid plan to create Docker Spaces](https://huggingface.co/docs/hub/spaces-overview),
-   although CPU Basic has no hourly charge. A fully $0 setup depends on account eligibility
-   or a grant; do not assume a new free account can create this Docker Space.
+1. Create Qdrant Cloud, Neon and generation-provider accounts.
 2. Index locally using `uv run python -m scripts.index_corpus --help`. Use an isolated
    database and collection while another indexing job runs. Finish indexing and stop
    source mutations before migration; copying an actively changing index is not a snapshot.
@@ -36,19 +69,27 @@ flowchart LR
    and repeatable. Counts must match; stale target rows require `--replace`, which
    deletes target data before copying. It never deletes source data. Use a dedicated
    target and checkpoint for each migration. Verify source document/chunk counts first.
-5. Set `HF_TOKEN` with write access, a strong `ADMIN_TOKEN`, and available provider keys
-   in `.env`. Select supported generation model IDs: older defaults may be retired;
-   check [Groq models](https://console.groq.com/docs/models) and Gemini's model catalog.
-   Review the repository link in `deploy/space/README.md` if publishing a fork.
-6. Preview with `uv run python -m scripts.deploy_space username/space --dry-run`.
-   It prints filenames and secret names only. Deploy with the same command without
-   `--dry-run`. Only the Docker build inputs and the Space README are uploaded.
-   Models download during the image build, then load lazily. Production warm-up runs
-   in a background thread; `/health` does not wait for it. `WARMUP=false` disables it.
-7. Check the build logs, `/health`, `/ready`, `/api/stats`, search and an investigation
-   with citations. `/ready` touches both remote databases. Compare migrated counts.
+5. Create a Render Blueprint from render.yaml. It selects the free plan,
+   Dockerfile.lite, and /health. Enter GROQ_API_KEY, GEMINI_API_KEY, QDRANT_URL,
+   QDRANT_API_KEY, DATABASE_URL and a strong ADMIN_TOKEN in the dashboard.
+   The blueprint sets DEPLOYMENT_PROFILE=lite, APP_ENV=prod and QDRANT_COLLECTION=documents.
+6. Verify /health, /ready, /api/stats, search and an investigation with citations.
+   /ready touches both remote databases. Compare migrated counts.
 
-## Secrets and automation
+Dockerfile.lite bakes only embeddings and listens on PORT (default 7860).
+The main Dockerfile builds full by default and accepts --build-arg PROFILE=lite;
+set DEPLOYMENT_PROFILE=lite at runtime for that build.
+
+HF PRO users can still use `uv run python -m scripts.deploy_space username/space --dry-run`
+and then omit --dry-run to deploy full. Set HF_TOKEN locally; it stays on the deployment
+machine. The existing Space workflow is an optional HF deployment path.
+
+Run `uv run python -m scripts.measure_memory --profile lite` (or full) locally with
+optional psutil installed. It builds isolated in-memory stores, warms selected models
+and samples RSS. This is a startup/warm-up peak, not a production request bound.
+No measured 512 MB guarantee is claimed.
+
+## Optional HF PRO secrets and automation
 
 `.env` is gitignored and must never be uploaded. Provider keys, database URL,
 Qdrant endpoint/key and admin token become HF Space secrets. `HF_TOKEN` remains on
@@ -71,53 +112,17 @@ container disk; the image retains its model cache. Never use SQLite or in-memory
 Qdrant for a production Space. Model IDs must match the image's downloaded models;
 changing models requires rebuilding and, for embeddings, rebuilding the index.
 
-### Free-tier limits and how the app copes
-
-Figures as documented by the providers at the time of writing (October 2026); they change, so check the linked pages.
-
-| Service | Free tier | Limitation that matters | Mitigation in this project |
-| --- | --- | --- | --- |
-| [Hugging Face Spaces](https://huggingface.co/docs/hub/spaces-overview) (CPU Basic) | 2 vCPU, 16 GB RAM, ephemeral disk | Sleeps after ~48 h without traffic; cold start rebuilds nothing but reloads models | Models baked into the image, lazy loading + background warm-up, keep-alive workflow every 2 days |
-| [Qdrant Cloud](https://qdrant.tech/documentation/cloud/create-cluster/) | 1 node, 1 GB RAM, 0.5 vCPU, 4 GB disk | Suspended after 1 week of inactivity, deleted after 4 weeks | Keep-alive calls `/ready` (touches Qdrant); the local index plus `migrate_to_cloud.py` can restore the cluster without re-embedding |
-| [Neon Postgres](https://neon.com/faqs/free-plan-limits-and-quotas) | 0.5 GB storage per project, 100 CU-hours/month, up to 2 CU | Compute scales to zero after 5 min idle (cold start on first query) | Connection pre-ping and retries; registry rows are small (~1 KB each incl. MinHash) |
-| [Groq](https://console.groq.com/docs/rate-limits) (openai/gpt-oss-120b) | ≈30 requests/min, ≈1,000 requests/day, ≈12k tokens/min per organisation | One investigation uses 3–8 calls, so roughly 150–300 investigations/day | Fallback to Gemini/OpenRouter, circuit breaker, LLM response cache, answer cache, per-IP rate limit (10/min), abstention instead of errors |
-| [Gemini API](https://ai.google.dev/gemini-api/docs/rate-limits) | Free tier with per-model RPM/RPD limits | Lower throughput; also used as the evaluation judge | Used as fallback generator and as judge (different provider from the generator) |
-
-Hugging Face has been changing free hardware eligibility; some accounts report that new free Docker Spaces need a
-subscription. If CPU Basic is not available on the account, the same image runs unchanged on any container host with
-≥2 GB RAM (for example a Koyeb or Render instance, or an Oracle Cloud Always Free VM); only `deploy_space.py` is HF-specific.
-
-## Sizing and costs
-
-67,000 float32 dense vectors at 384 dimensions need 102,912,000 bytes, about 98 MiB,
-for raw dense values alone. Payload text, sparse postings, HNSW, replicas and service
-memory add overhead; measure the actual collection. The
-[Qdrant free tier](https://qdrant.tech/pricing/) is intended for prototypes.
-Budget roughly 1-3 GiB for the three CPU model sessions plus tokenizers and working
-buffers as a planning estimate, not a measured bound. Load testing should include
-concurrent reranking/NLI, LSH rebuild, Postgres connections and process RSS.
-
-| Component | Infrastructure / usage estimate |
-| --- | --- |
-| HF CPU Basic compute | $0 hourly; account subscription may be required |
-| Qdrant free cluster | $0 within free-tier limits |
-| Neon free database | $0 within free-tier limits |
-| Infrastructure target | $0 only with eligible HF access and free-tier capacity |
-| Example investigation | 20k input + 3k output tokens at $0.15/$0.60 per million: ≈ $0.005 |
-| Cached answer | No new generation charge on a full answer-cache hit |
-
-The generation example uses Groq's list rates for `openai/gpt-oss-120b` (the default model) as a paid-tier reference;
-on the free tier the actual charge is $0, and the estimate shows what the same traffic would cost after leaving it. Sum tokens across all planner,
-tool and synthesis calls; retries and fallbacks can raise cost. Free API quotas may
-reduce billed usage to $0. Verify current provider prices and model availability.
+Render disk is lost on sleep, restart or redeploy. Keep production stores remote.
+HF PRO is a paid alternative; the full profile needs at least 2 GB and actual RSS
+should be measured with concurrency headroom.
 
 ## Operations
 
 Run the app with a single worker process. The LSH index, BM25 statistics snapshot, and rate limiter are process-local; multiple workers cannot keep them consistent. The Dockerfile runs one worker. Keep WEB_CONCURRENCY and UVICORN_WORKERS set to 1.
 
 
-Redeploy by rerunning the script or workflow. Rotate keys at their provider, update
-local and GitHub secrets, then deploy to update HF secrets and verify readiness.
+Redeploy Render from its dashboard or connected repository. Rotate keys at their provider
+and update dashboard secrets, then verify readiness. For HF, rerun the script or workflow.
 Do not log connection strings or key values. Change `ADMIN_TOKEN` at the same time
 in authorized clients. Review traces and `/metrics` for latency and provider failures.
 

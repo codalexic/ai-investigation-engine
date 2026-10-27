@@ -149,7 +149,9 @@ RUN_MODEL_TESTS=1 uv run python -m pytest -m models   # optional: real ONNX mode
 
 ## Deployment
 
-The app runs as one Docker container on Hugging Face Spaces with Qdrant Cloud and Neon Postgres, all on free tiers.
+The demo runs on Render free using `Dockerfile.lite` and `render.yaml`, with Qdrant Cloud and Neon Postgres.
+Lite targets 512 MB / 0.1 vCPU with grounding verification, reranking and NLI disabled.
+Render sleeps after 15 minutes idle. Full remains the default for hosts with at least 2 GB RAM.
 The corpus is embedded once locally and migrated, so the cloud never re-embeds. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 for the architecture, secrets handling, free-tier limits and costs.
 
