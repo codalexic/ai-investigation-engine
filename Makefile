@@ -44,3 +44,7 @@ eval-e2e:
 
 report:
 	uv run python scripts/make_report.py
+
+.PHONY: benchmark
+benchmark:
+	uv run python scripts/benchmark.py

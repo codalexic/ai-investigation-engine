@@ -69,6 +69,94 @@ Not run yet
 
 Not run yet
 
+### Performance
+
+| Mode | Concurrency | p50 ms | p95 ms | p99 ms | QPS |
+| --- | --- | --- | --- | --- | --- |
+| dense | 1 | 22.605 | 39.120 | 45.883 | 40.004 |
+| dense | 4 | 71.028 | 107.807 | 120.713 | 54.390 |
+| dense | 8 | 157.150 | 196.942 | 216.476 | 50.594 |
+| sparse | 1 | 19.216 | 34.177 | 35.610 | 47.342 |
+| sparse | 4 | 65.750 | 95.789 | 110.465 | 58.086 |
+| sparse | 8 | 125.224 | 157.905 | 168.750 | 63.695 |
+| hybrid | 1 | 36.334 | 56.023 | 66.523 | 27.573 |
+| hybrid | 4 | 123.500 | 164.392 | 173.345 | 31.666 |
+| hybrid | 8 | 244.646 | 296.707 | 314.933 | 32.164 |
+| hybrid_rerank | 1 | 853.273 | 1520.048 | 1581.822 | 1.074 |
+| hybrid_rerank | 4 | 2459.901 | 4525.482 | 5646.053 | 1.438 |
+| hybrid_rerank | 8 | 4924.739 | 17892.975 | 28136.338 | 1.145 |
+
+#### Retrieval stages
+
+| Mode | Concurrency | Stage | Mean ms | p95 ms |
+| --- | --- | --- | --- | --- |
+| dense | 1 | dense | 17.328 | 30.883 |
+| dense | 1 | sparse | 0.001 | 0.001 |
+| dense | 1 | fusion | 7.519 | 9.961 |
+| dense | 1 | rerank | 0.001 | 0.001 |
+| dense | 1 | mmr | 0.019 | 0.027 |
+| dense | 4 | dense | 67.111 | 102.502 |
+| dense | 4 | sparse | 0.001 | 0.001 |
+| dense | 4 | fusion | 5.986 | 8.123 |
+| dense | 4 | rerank | 0.001 | 0.001 |
+| dense | 4 | mmr | 0.019 | 0.022 |
+| dense | 8 | dense | 149.407 | 188.662 |
+| dense | 8 | sparse | 0.001 | 0.001 |
+| dense | 8 | fusion | 6.482 | 10.498 |
+| dense | 8 | rerank | 0.001 | 0.002 |
+| dense | 8 | mmr | 0.016 | 0.024 |
+| sparse | 1 | dense | 0.000 | 0.001 |
+| sparse | 1 | sparse | 15.322 | 28.422 |
+| sparse | 1 | fusion | 5.671 | 7.843 |
+| sparse | 1 | rerank | 0.000 | 0.001 |
+| sparse | 1 | mmr | 0.015 | 0.022 |
+| sparse | 4 | dense | 0.000 | 0.001 |
+| sparse | 4 | sparse | 62.388 | 89.628 |
+| sparse | 4 | fusion | 5.888 | 8.355 |
+| sparse | 4 | rerank | 0.000 | 0.001 |
+| sparse | 4 | mmr | 0.016 | 0.023 |
+| sparse | 8 | dense | 0.000 | 0.001 |
+| sparse | 8 | sparse | 117.581 | 151.565 |
+| sparse | 8 | fusion | 5.842 | 7.916 |
+| sparse | 8 | rerank | 0.001 | 0.001 |
+| sparse | 8 | mmr | 0.016 | 0.022 |
+| hybrid | 1 | dense | 14.816 | 28.137 |
+| hybrid | 1 | sparse | 10.942 | 29.534 |
+| hybrid | 1 | fusion | 10.318 | 15.280 |
+| hybrid | 1 | rerank | 0.001 | 0.001 |
+| hybrid | 1 | mmr | 0.029 | 0.048 |
+| hybrid | 4 | dense | 56.386 | 87.201 |
+| hybrid | 4 | sparse | 58.820 | 89.802 |
+| hybrid | 4 | fusion | 10.398 | 15.551 |
+| hybrid | 4 | rerank | 0.001 | 0.001 |
+| hybrid | 4 | mmr | 0.031 | 0.046 |
+| hybrid | 8 | dense | 115.412 | 166.907 |
+| hybrid | 8 | sparse | 120.214 | 173.892 |
+| hybrid | 8 | fusion | 10.442 | 14.937 |
+| hybrid | 8 | rerank | 0.001 | 0.001 |
+| hybrid | 8 | mmr | 0.039 | 0.049 |
+| hybrid_rerank | 1 | dense | 17.516 | 31.846 |
+| hybrid_rerank | 1 | sparse | 16.195 | 31.558 |
+| hybrid_rerank | 1 | fusion | 12.998 | 16.818 |
+| hybrid_rerank | 1 | rerank | 884.363 | 1475.879 |
+| hybrid_rerank | 1 | mmr | 0.025 | 0.029 |
+| hybrid_rerank | 4 | dense | 26.018 | 49.166 |
+| hybrid_rerank | 4 | sparse | 22.875 | 43.286 |
+| hybrid_rerank | 4 | fusion | 18.800 | 24.995 |
+| hybrid_rerank | 4 | rerank | 2701.763 | 4414.007 |
+| hybrid_rerank | 4 | mmr | 0.064 | 0.129 |
+| hybrid_rerank | 8 | dense | 111.278 | 585.136 |
+| hybrid_rerank | 8 | sparse | 115.630 | 364.930 |
+| hybrid_rerank | 8 | fusion | 26.139 | 37.713 |
+| hybrid_rerank | 8 | rerank | 6690.903 | 17253.187 |
+| hybrid_rerank | 8 | mmr | 0.130 | 0.481 |
+
+#### Indexing throughput
+
+| Records | Chunks | Seconds | Records/s |
+| --- | --- | --- | --- |
+| 45 | 237 | 25.071 | 1.795 |
+
 ## Analysis
 
 ### Retrieval: what the numbers say
@@ -103,6 +191,18 @@ slightly higher on rank metrics (MRR@10 0.671 vs 0.547, Recall@10 0.872 vs 0.821
 generator's context budget, cost and the NLI verifier's 512-token window all favour small, topical chunks, structure-aware
 chunking remains the default; the rank gap points at its weakness — sections shorter than the minimum get merged with
 neighbours, which occasionally dilutes a chunk.
+
+### Performance at full scale
+
+Measured on the 67k-point index (laptop CPU, 12 threads, local Qdrant). Without reranking the retrieval path is cheap:
+dense p50 23 ms / 40 QPS, BM25 19 ms / 47 QPS, hybrid 36 ms / 28 QPS at concurrency 1, and throughput grows up to
+~32–64 QPS at concurrency 4–8 while p95 stays under 300 ms. Qdrant search itself is 15–17 ms; fusion, boosts and MMR add
+under 10 ms. The cross-encoder changes the picture completely: ~0.85 s p50 and ~1 QPS, and because ONNX inference already
+uses every core, concurrency only adds queueing (p99 28 s at concurrency 8). Reranking is therefore the component that
+decides capacity: it buys +5 points of MRR on HotpotQA (0.881 → 0.933) at ~25× the latency. On 2 shared vCPUs (the free
+Space) it is the first thing to tune — fewer rerank candidates (`RERANK_TOP_N`), a quantised model, or skipping the rerank
+when the fused ranking is already confident. Indexing throughput was 12.3 records/s (66,795 records, 66,995 chunks in
+90 minutes), dominated by CPU embedding; it is a one-off cost because the index is migrated to the cloud, never rebuilt there.
 
 ### Where retrieval fails and why
 
@@ -158,6 +258,7 @@ make eval-retrieval
 make eval-chunking
 make eval-embeddings
 make eval-e2e
+make benchmark
 make report
 ```
 
