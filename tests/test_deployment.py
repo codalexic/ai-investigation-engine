@@ -22,8 +22,8 @@ def configuration(**kwargs):
 def test_downloads_use_configured_cache(monkeypatch):
     embedding, reranking, nli = Mock(), Mock(), Mock()
     monkeypatch.setattr("scripts.download_models.FastEmbedEmbedder", embedding)
-    monkeypatch.setattr("scripts.download_models.CrossEncoderReranker", reranking)
-    monkeypatch.setattr("scripts.download_models.OnnxNliModel", nli)
+    monkeypatch.setattr("app.retrieval.rerank.CrossEncoderReranker", reranking)
+    monkeypatch.setattr("app.agent.nli.OnnxNliModel", nli)
     settings = configuration(model_cache_dir="cache")
     download_models(settings)
     embedding.assert_called_once_with(settings.embedding_model, cache_dir="cache")

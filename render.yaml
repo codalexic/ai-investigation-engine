@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: investigation-engine
+    plan: free
+    runtime: docker
+    dockerfilePath: ./Dockerfile.lite
+    healthCheckPath: /health
+    envVars:
+      - key: DEPLOYMENT_PROFILE
+        value: lite
+      - key: APP_ENV
+        value: prod
+      - key: QDRANT_COLLECTION
+        value: documents
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false

@@ -1,4 +1,5 @@
 FROM python:3.11-slim
+ARG PROFILE=full
 COPY --from=ghcr.io/astral-sh/uv:0.11.27 /uv /uvx /bin/
 RUN useradd --create-home --uid 1000 appuser && mkdir -p /app && chown appuser:appuser /app
 WORKDIR /app
@@ -9,7 +10,7 @@ COPY --chown=appuser:appuser pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY --chown=appuser:appuser app ./app
 COPY --chown=appuser:appuser scripts/download_models.py ./scripts/download_models.py
-RUN uv sync --frozen --no-dev && python -m scripts.download_models && mkdir -p /app/data
+RUN uv sync --frozen --no-dev && python -m scripts.download_models --profile "$PROFILE" && mkdir -p /app/data
 ENV HF_HUB_OFFLINE=1
 EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860/health', timeout=4)"]
