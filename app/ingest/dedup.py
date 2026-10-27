@@ -1,12 +1,27 @@
 import hashlib
 import random
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from functools import wraps
+from threading import RLock
+from typing import Any, ParamSpec, TypeVar
 
 import numpy as np
 
 from app.core.errors import IngestionError
 from app.ingest.parsers import normalize_text
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def locked(method: Callable[P, T]) -> Callable[P, T]:
+    @wraps(method)
+    def wrapped(self: Any, *args: Any, **kwargs: Any) -> T:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 def content_hash(text: str) -> str:
@@ -76,6 +91,7 @@ class LSHIndex:
         if bands < 1 or num_perm < 1 or num_perm % bands:
             raise IngestionError("Bands must divide num_perm")
         self.num_perm, self.bands = num_perm, bands
+        self._lock = RLock()
         self.signatures: dict[str, np.ndarray] = {}
         self.buckets: dict[tuple[int, bytes], set[str]] = {}
 
@@ -87,6 +103,7 @@ class LSHIndex:
             for i, band in enumerate(np.split(sig, self.bands))
         ]
 
+    @locked
     def add(self, key: str, sig: np.ndarray) -> None:
         keys = self._keys(sig)
         self.remove(key)
@@ -94,6 +111,7 @@ class LSHIndex:
         for bucket in keys:
             self.buckets.setdefault(bucket, set()).add(key)
 
+    @locked
     def remove(self, key: str) -> None:
         sig = self.signatures.pop(key, None)
         if sig is not None:
@@ -102,9 +120,11 @@ class LSHIndex:
                 if not self.buckets[bucket]:
                     del self.buckets[bucket]
 
+    @locked
     def query(self, sig: np.ndarray) -> set[str]:
         return set().union(*(self.buckets.get(bucket, set()) for bucket in self._keys(sig)))
 
+    @locked
     def find_near_duplicates(
         self, sig: np.ndarray, threshold: float = 0.85
     ) -> list[tuple[str, float]]:
@@ -112,6 +132,7 @@ class LSHIndex:
             (
                 (key, score)
                 for key in self.query(sig)
+                if key in self.signatures
                 if (score := jaccard_estimate(sig, self.signatures[key])) >= threshold
             ),
             key=lambda item: (-item[1], item[0]),

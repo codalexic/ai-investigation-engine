@@ -65,3 +65,22 @@ def test_signature_throughput():
     duration = perf_counter() - started
     assert signatures.shape == (1000, 128)
     assert duration < 2, f"Signatures took {duration:.3f}s"
+
+
+def test_threaded_lsh_mutations():
+    from concurrent.futures import ThreadPoolExecutor
+
+    index = LSHIndex()
+    signature = MinHasher().signature("shared content for candidate matching")
+
+    def work(number):
+        key = str(number % 8)
+        for _ in range(20):
+            index.add(key, signature)
+            index.query(signature)
+            index.find_near_duplicates(signature)
+            index.remove(key)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(work, range(32)))
+    assert not index.signatures and not index.buckets

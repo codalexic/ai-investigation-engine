@@ -61,3 +61,23 @@ def test_entities_order_and_custom_services():
         "incident_ids": ["INC-42", "INC-5"],
         "dates": ["2024-03-14"],
     }
+
+
+def test_json_safe_nested_metadata():
+    import json
+    from datetime import datetime
+
+    from app.ingest.metadata import json_safe
+
+    result = json_safe(
+        {
+            "when": datetime(2025, 1, 2),
+            "raw": b"secret",
+            "nested": [date(2025, 1, 2), b"drop", object()],
+        }
+    )
+    assert result["when"] == "2025-01-02T00:00:00"
+    assert "raw" not in result
+    assert result["nested"][0] == "2025-01-02"
+    assert len(result["nested"]) == 2
+    json.dumps(result, allow_nan=False)

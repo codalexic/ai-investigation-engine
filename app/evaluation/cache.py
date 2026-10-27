@@ -5,7 +5,7 @@ from sqlalchemy.engine import Engine
 
 from app.llm.cache import CachedClient
 from app.llm.client import LLMClient
-from app.llm.types import LLMResponse, Message
+from app.llm.types import LLMResponse, Message, StreamResult
 
 
 class _StreamAdapter:
@@ -16,8 +16,9 @@ class _StreamAdapter:
         self.max_tokens = getattr(inner, "max_tokens", None)
 
     def chat(self, messages: list[Message], **kwargs: Any) -> LLMResponse:
-        text = "".join(self.inner.stream(messages, **kwargs))
-        response = getattr(self.inner, "last_response", LLMResponse())
+        stream = self.inner.stream(messages, **kwargs)
+        text = "".join(stream)
+        response = getattr(stream, "response", LLMResponse())
         return response.model_copy(update={"content": text})
 
 
@@ -26,6 +27,11 @@ class EvaluationCachedClient(CachedClient):
         super().__init__(inner, engine)
         self.stream_cache = CachedClient(_StreamAdapter(inner), engine)
 
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
-        self.last_response = self.stream_cache.chat(messages, **kwargs)
-        yield self.last_response.content
+    def stream(self, messages: list[Message], **kwargs: Any) -> StreamResult:
+        return StreamResult(lambda result: self._stream(messages, result, **kwargs))
+
+    def _stream(
+        self, messages: list[Message], result: StreamResult, **kwargs: Any
+    ) -> Iterator[str]:
+        result.response = self.stream_cache.chat(messages, **kwargs)
+        yield result.response.content

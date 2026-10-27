@@ -50,6 +50,53 @@ ERROR_STATUS = {
 }
 
 
+class RequestBodyLimitMiddleware:
+    def __init__(self, app: ASGIApp, limit: int) -> None:
+        self.app, self.limit = app, limit
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", []))
+        try:
+            length = int(headers.get(b"content-length", b"0"))
+        except ValueError:
+            length = 0
+        response = JSONResponse(
+            {
+                "error": {
+                    "type": "UploadTooLargeError",
+                    "message": "Request body exceeds upload limit",
+                }
+            },
+            status_code=413,
+        )
+        if length > self.limit:
+            await response(scope, receive, send)
+            return
+        messages = []
+        size = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            size += len(message.get("body", b""))
+            if size > self.limit:
+                await response(scope, receive, send)
+                return
+            messages.append(message)
+            if not message.get("more_body", False):
+                break
+        iterator = iter(messages)
+
+        async def replay() -> Message:
+            message = next(iterator, None)
+            return message if message is not None else await receive()
+
+        await self.app(scope, replay, send)
+
+
 class RequestLoggingMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -132,6 +179,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        if max(settings.web_concurrency, settings.uvicorn_workers) > 1:
+            logger.warning(
+                "single_worker_required web_concurrency=%s uvicorn_workers=%s",
+                settings.web_concurrency,
+                settings.uvicorn_workers,
+            )
         container = Container.build(settings)
         application.state.container = container
         try:
@@ -172,6 +225,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def index():
         return FileResponse(static / "index.html")
 
+    application.add_middleware(
+        RequestBodyLimitMiddleware, limit=(settings.max_upload_mb + 1) * 1024**2
+    )
     application.add_middleware(RequestLoggingMiddleware)
     application.add_exception_handler(AppError, handle_app_error)
 

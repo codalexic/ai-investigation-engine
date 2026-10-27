@@ -12,7 +12,7 @@ from app.llm.cache import CachedClient
 from app.llm.client import FallbackClient, OpenAICompatibleClient, build_llm
 from app.llm.jsonutil import extract_json
 from app.llm.tokens import count_tokens, fit_to_budget
-from app.llm.types import LLMResponse, Message, ToolCall, ToolSpec, Usage
+from app.llm.types import LLMResponse, Message, StreamResult, ToolCall, ToolSpec, Usage
 
 MESSAGES = [Message(role="user", content="question")]
 
@@ -103,8 +103,9 @@ def test_stream():
     content += "\n\ndata: " + json.dumps({"choices": [], "usage": {"completion_tokens": 1}})
     content += "\n\ndata: [DONE]\n\n"
     llm = client(lambda r: httpx.Response(200, text=content))
-    assert list(llm.stream(MESSAGES)) == ["hello"]
-    assert llm.last_response.usage.completion_tokens == 1
+    stream = llm.stream(MESSAGES)
+    assert list(stream) == ["hello"]
+    assert stream.response.usage.completion_tokens == 1
 
 
 def test_fallback_and_circuit(monkeypatch):
@@ -203,13 +204,62 @@ def test_stream_fallback_before_any_output():
     first = Mock(model="first")
     first.stream.side_effect = LLMError("down")
     second = Mock(model="second")
-    second.stream.return_value = iter(["ok"])
-    second.last_response = LLMResponse(provider="second")
+    stream = StreamResult(lambda result: iter(["ok"]))
+    stream.response = LLMResponse(provider="second")
+    second.stream.return_value = stream
     chain = FallbackClient([first, second])
-    assert list(chain.stream(MESSAGES)) == ["ok"]
-    assert chain.last_response.provider == "second"
+    stream = chain.stream(MESSAGES)
+    assert list(stream) == ["ok"]
+    assert stream.response.provider == "second"
 
 
 def test_invalid_first_json_is_not_replaced_with_nested_object():
     with pytest.raises(LLMError):
         extract_json('{bad: {"nested":1}}')
+
+
+@pytest.mark.parametrize("finish", [False, True])
+def test_stream_requires_terminal_marker(finish):
+    content = "data: " + json.dumps({"choices": [{"delta": {"content": "partial"}}]}) + "\n\n"
+    if finish:
+        content += (
+            "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]}) + "\n\n"
+        )
+    provider = client(lambda request: httpx.Response(200, text=content))
+    fallback = Mock()
+    chain = FallbackClient([provider, fallback])
+    stream = chain.stream(MESSAGES)
+    assert next(stream) == "partial"
+    if finish:
+        assert list(stream) == []
+    else:
+        with pytest.raises(LLMError, match="stream ended unexpectedly"):
+            list(stream)
+    fallback.stream.assert_not_called()
+
+
+def test_overlapping_stream_accounting_is_per_call():
+    from app.api.llm_metrics import MeteredClient
+    from app.api.observability import Metrics
+
+    calls = []
+
+    def handle(request):
+        number = len(calls) + 1
+        calls.append(number)
+        text = "data: " + json.dumps({"choices": [{"delta": {"content": str(number)}}]})
+        text += "\n\ndata: " + json.dumps({"choices": [], "usage": {"completion_tokens": number}})
+        text += "\n\ndata: [DONE]\n\n"
+        return httpx.Response(200, text=text)
+
+    provider = client(handle)
+    metrics = Metrics()
+    metered = MeteredClient(FallbackClient([provider]), metrics)
+    a, b = metered.stream(MESSAGES), metered.stream(MESSAGES)
+    assert next(a) == "1"
+    assert next(b) == "2"
+    list(b)
+    list(a)
+    assert a.response.usage.completion_tokens == 1
+    assert b.response.usage.completion_tokens == 2
+    assert metrics.tokens.labels("test", "model", "completion")._value.get() == 3

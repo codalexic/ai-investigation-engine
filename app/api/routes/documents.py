@@ -171,7 +171,7 @@ async def replace(
     metadata: str | None = Form(None),
     x_admin_token: str | None = Header(None),
 ) -> IngestResult:
-    record = active(container, doc_id)
+    record = await run_in_threadpool(active, container, doc_id)
     protect(container, record, x_admin_token)
     preserved = {key: value for key, value in record.extra.items() if key != "format"}
     fields = {**preserved, **metadata_fields(metadata, doc_type), "origin": origin(record)}

@@ -32,7 +32,10 @@ def prepare(
     if body.retrieval:
         config.update(body.retrieval.model_dump(exclude_unset=True))
     key = request.app.state.queries.key(
-        body.question, body.filters.model_dump(mode="json") if body.filters else {}, config
+        body.question,
+        body.filters.model_dump(mode="json") if body.filters else {},
+        config,
+        container.settings,
     )
     return key, request.app.state.queries.get(key), config
 

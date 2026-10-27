@@ -113,6 +113,9 @@ reduce billed usage to $0. Verify current provider prices and model availability
 
 ## Operations
 
+Run the app with a single worker process. The LSH index, BM25 statistics snapshot, and rate limiter are process-local; multiple workers cannot keep them consistent. The Dockerfile runs one worker. Keep WEB_CONCURRENCY and UVICORN_WORKERS set to 1.
+
+
 Redeploy by rerunning the script or workflow. Rotate keys at their provider, update
 local and GitHub secrets, then deploy to update HF secrets and verify readiness.
 Do not log connection strings or key values. Change `ADMIN_TOKEN` at the same time

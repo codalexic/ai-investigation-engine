@@ -1,6 +1,5 @@
 import hashlib
 import json
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,7 +9,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.core.errors import ConfigurationError, LLMError
 from app.llm.client import LLMClient
-from app.llm.types import LLMResponse, Message, ToolSpec
+from app.llm.types import LLMResponse, Message, StreamResult, ToolSpec
 
 
 class CachedClient:
@@ -102,6 +101,5 @@ class CachedClient:
             raise LLMError("Unable to write the LLM cache") from exc
         return response
 
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
-        yield from self.inner.stream(messages, **kwargs)
-        self.last_response = getattr(self.inner, "last_response", LLMResponse())
+    def stream(self, messages: list[Message], **kwargs: Any) -> StreamResult:
+        return self.inner.stream(messages, **kwargs)

@@ -5,6 +5,7 @@ import re
 import unicodedata
 from pathlib import Path
 from typing import Protocol
+from zipfile import BadZipFile, ZipFile
 
 from bs4 import BeautifulSoup, Comment
 from docx import Document
@@ -13,6 +14,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from pypdf import PdfReader
 
+from app.core.config import get_settings
 from app.core.errors import IngestionError, UnsupportedFormatError
 from app.ingest.models import ParsedDocument, Section
 
@@ -35,7 +37,29 @@ def decode(data: bytes) -> str:
 def assemble(sections: list[Section], metadata: dict) -> ParsedDocument:
     sections = [Section(s.heading, s.level, normalize_text(s.text)) for s in sections]
     sections = [s for s in sections if s.text]
-    return ParsedDocument("\n\n".join(s.text for s in sections), sections, metadata)
+    text = "\n\n".join(s.text for s in sections)
+    check_text_length(text)
+    return ParsedDocument(text, sections, metadata)
+
+
+def check_text_length(text: str) -> None:
+    if len(text) > get_settings().max_extracted_chars:
+        raise IngestionError("Extracted text exceeds max_extracted_chars")
+
+
+def validate_docx(data: bytes) -> None:
+    try:
+        with ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            if sum(m.file_size for m in members) > get_settings().max_extracted_mb * 1024**2:
+                raise UnsupportedFormatError("DOCX expansion exceeds max_extracted_mb")
+            for member in members:
+                if member.file_size > 25 * 1024**2:
+                    raise UnsupportedFormatError("DOCX member exceeds 25 MB")
+                if member.file_size / max(1, member.compress_size) > 100:
+                    raise UnsupportedFormatError("DOCX compression ratio exceeds 100")
+    except BadZipFile as exc:
+        raise IngestionError("Invalid DOCX zip archive") from exc
 
 
 class Parser(Protocol):
@@ -69,6 +93,7 @@ class DOCXParser:
     extensions = (".docx",)
 
     def parse(self, data: bytes, filename: str) -> ParsedDocument:
+        validate_docx(data)
         try:
             doc = Document(io.BytesIO(data))
             sections = [Section(None, 0, "")]
@@ -95,6 +120,8 @@ class DOCXParser:
                     "created_at": props.created,
                 },
             )
+        except IngestionError:
+            raise
         except Exception as exc:
             raise IngestionError(f"Cannot parse DOCX: {filename}") from exc
 

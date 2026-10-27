@@ -132,11 +132,21 @@ class DocumentRegistry:
                 )
             )
 
-    def upsert(self, record: DocumentRecord | dict[str, Any]) -> DocumentRecord:
+    def upsert(
+        self, record: DocumentRecord | dict[str, Any], *, add_version: bool = False
+    ) -> DocumentRecord:
         record = DocumentRecord(**record) if isinstance(record, dict) else record
         record.updated_at = datetime.now(UTC)
         with self.session() as session:
             merged = session.merge(record)
+            if add_version:
+                session.add(
+                    DocumentVersion(
+                        doc_id=record.doc_id,
+                        version=record.version,
+                        content_hash=record.content_hash,
+                    )
+                )
             self._bump(session)
             return merged
 

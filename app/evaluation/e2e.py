@@ -90,7 +90,8 @@ def score(question: dict, result: InvestigationResult, judge: dict | None) -> di
         mapping = {c.evidence_id: c.doc_id for c in result.citations}
         metrics["contradiction_detection_rate"] = float(
             any(
-                {mapping[e] for e in conflict.evidence if e in mapping} & gold
+                len({mapping[e] for e in conflict.evidence if e in mapping} & gold)
+                >= min(2, len(gold))
                 for conflict in result.contradictions
             )
         )

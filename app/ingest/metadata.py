@@ -1,7 +1,9 @@
+import math
 import re
 from collections.abc import Iterable
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 from app.ingest.models import DocumentMetadata, ParsedDocument
 
@@ -89,5 +91,19 @@ def extract_metadata(
         created_at=created,
         doc_type=info.get("doc_type") or (winners[0] if best and len(winners) == 1 else "other"),
         entities=extract_entities(parsed.text, extra_services),
-        extra=dict(info),
+        extra=json_safe(info),
     )
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items() if not isinstance(v, bytes)}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(v) for v in value if not isinstance(v, bytes)]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    return str(value)

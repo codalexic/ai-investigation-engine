@@ -112,3 +112,75 @@ def test_near_duplicate(api_client):
     result = upload(api_client, (text + " additional").encode(), "second.txt").json()
     assert result["status"] == "near_duplicate"
     assert result["duplicate_of"]
+
+
+@pytest.mark.parametrize("extension", ["docx", "pdf"])
+def test_created_metadata_persists_end_to_end(api_client, extension):
+    from datetime import datetime
+
+    stream = io.BytesIO()
+    if extension == "docx":
+        document = Document()
+        document.core_properties.created = datetime(2024, 3, 12, 10, 30)
+        document.add_paragraph("Document with core creation properties")
+        document.save(stream)
+    else:
+        canvas = Canvas(stream, invariant=True)
+        canvas.drawString(40, 700, "Document with PDF creation properties")
+        canvas.save()
+    response = upload(api_client, stream.getvalue(), "dated." + extension)
+    assert response.status_code == 200, response.text
+    key = response.json()["doc_id"]
+    detail = api_client.get(f"/api/documents/{key}").json()
+    assert isinstance(detail["extra"]["created_at"], str)
+    assert detail["created_at"]
+    assert api_client.get(f"/api/documents/{key}/chunks").json()
+
+
+def test_metadata_only_replacement_updates_payload_and_version(api_client):
+    from app.ingest.registry import IndexMeta
+
+    container = api_client.app.state.container
+    first = upload(api_client).json()
+    key = first["doc_id"]
+    with container.registry.session() as session:
+        previous = session.get(IndexMeta, "index_version").value
+    response = api_client.put(
+        f"/api/documents/{key}",
+        files={"file": ("incident.txt", b"payment-service rollback succeeded")},
+        data={
+            "metadata": json.dumps(
+                {"title": "Corrected", "created_at": "2025-03-12", "owner": "Operations"}
+            ),
+            "doc_type": "runbook",
+        },
+    )
+    assert response.json()["status"] == "metadata_updated"
+    detail = api_client.get(f"/api/documents/{key}").json()
+    assert detail["title"] == "Corrected" and detail["extra"]["owner"] == "Operations"
+    assert len(detail["versions"]) == 1
+    payload = api_client.get(f"/api/documents/{key}/chunks").json()[0]
+    assert payload["title"] == "Corrected" and payload["doc_type"] == "runbook"
+    assert payload["created_at"].startswith("2025-03-12")
+    with container.registry.session() as session:
+        assert session.get(IndexMeta, "index_version").value == previous + 1
+
+
+def test_replace_lookup_runs_in_threadpool(api_client, monkeypatch):
+    import threading
+
+    first = upload(api_client).json()
+    registry = api_client.app.state.container.registry
+    original = registry.get
+    threads = []
+
+    def get(key):
+        threads.append(threading.current_thread().name)
+        return original(key)
+
+    monkeypatch.setattr(registry, "get", get)
+    response = api_client.put(
+        f"/api/documents/{first['doc_id']}", files={"file": ("x.txt", b"replacement")}
+    )
+    assert response.status_code == 200
+    assert threads and all("portal" not in name.lower() for name in threads)

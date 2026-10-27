@@ -141,3 +141,46 @@ def test_query_cache_eviction_and_embedding_errors(fake_model, monkeypatch):
     fake_model.query_embed.side_effect = RuntimeError("offline")
     with pytest.raises(RetrievalError):
         embedder.embed_query("uncached")
+
+
+def test_statistics_save_keeps_mutations_during_io(tmp_path):
+    from sqlalchemy import event
+
+    engine = create_engine(f"sqlite:///{tmp_path}/stats.db")
+    repo = Bm25StatsRepository(engine)
+    stats = Bm25Statistics()
+    stats.add_document(["alpha"])
+    changed = False
+
+    def mutate(conn, cursor, statement, params, context, many):
+        nonlocal changed
+        if not changed:
+            changed = True
+            stats.add_document(["beta"])
+
+    event.listen(engine, "before_cursor_execute", mutate)
+    repo.save(stats)
+    assert stats.dirty == {"beta"}
+    repo.save(stats)
+    assert repo.load() == stats
+    engine.dispose()
+
+
+def test_threaded_statistics_mutation_and_save(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    engine = create_engine(f"sqlite:///{tmp_path}/stats.db")
+    repo = Bm25StatsRepository(engine)
+    stats = Bm25Statistics()
+
+    def work(index):
+        stats.add_document([str(index), "shared"])
+        repo.save(stats)
+        stats.remove_document([str(index), "shared"])
+        repo.save(stats)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(work, range(32)))
+    assert stats.N == 0 and not stats.df and not stats.dirty
+    assert repo.load() == stats
+    engine.dispose()

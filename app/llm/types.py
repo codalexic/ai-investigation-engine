@@ -1,3 +1,4 @@
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -35,3 +36,18 @@ class LLMResponse(BaseModel):
     provider: str = ""
     latency_ms: float = 0
     cached: bool = False
+
+
+class StreamResult(Iterator[str]):
+    def __init__(self, factory: Callable[["StreamResult"], Iterator[str]]) -> None:
+        self.response = LLMResponse()
+        self._iterator = factory(self)
+
+    def text_iter(self) -> Iterator[str]:
+        return self
+
+    def __iter__(self) -> "StreamResult":
+        return self
+
+    def __next__(self) -> str:
+        return next(self._iterator)
