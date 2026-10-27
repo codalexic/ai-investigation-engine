@@ -2,6 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import wraps
+from time import monotonic, sleep
 from typing import Any, ParamSpec, TypeVar
 from uuid import NAMESPACE_URL, uuid5
 
@@ -99,12 +100,18 @@ class QdrantStore:
         bm25: Bm25Encoder,
         stats_repo: Bm25StatsRepository,
         embedding_batch_size: int = 64,
+        bulk: bool = False,
+        bulk_timeout_s: float = 30.0,
     ) -> None:
         if embedding_batch_size < 1:
             raise RetrievalError("Embedding batch size must be positive")
         self.client, self.collection, self.embedder = client, collection, embedder
         self.bm25, self.stats_repo = bm25, stats_repo
         self.embedding_batch_size = embedding_batch_size
+        self.bulk = bulk
+        self.bulk_timeout_s = bulk_timeout_s
+        self._pending: set[str] = set()
+        self._last_batch: list[m.PointStruct] = []
 
     @_guard
     def ensure_collection(self) -> None:
@@ -189,7 +196,10 @@ class QdrantStore:
                             payload=payload,
                         )
                     )
-                self.client.upsert(self.collection, points, wait=True)
+                self.client.upsert(self.collection, points, wait=not self.bulk)
+                if self.bulk:
+                    self._pending.update(str(point.id) for point in points)
+                    self._last_batch = points
             except Exception:
                 for chunk in batch:
                     self.bm25.stats.remove_document(analyze(chunk.text))
@@ -197,6 +207,7 @@ class QdrantStore:
                     self.bm25.stats.add_document(analyze(old.payload["text"]))
                 raise
             self.stats_repo.save(self.bm25.stats)
+        self.finish_bulk()
         self.stats_repo.save(self.bm25.stats)
 
     @_guard
@@ -286,3 +297,20 @@ class QdrantStore:
     @_guard
     def count(self) -> int:
         return self.client.count(self.collection, exact=True).count
+
+    @_guard
+    def finish_bulk(self) -> None:
+        if not self._pending:
+            return
+        # Wait on the final batch, then verify visibility across all shards before committing IDs.
+        self.client.upsert(self.collection, self._last_batch, wait=True)
+        deadline = monotonic() + self.bulk_timeout_s
+        while self._pending:
+            ids = sorted(self._pending)[: self.embedding_batch_size]
+            found = self.client.retrieve(self.collection, ids, with_payload=False)
+            self._pending.difference_update(str(point.id) for point in found)
+            if len(found) < len(ids):
+                if monotonic() >= deadline:
+                    raise RetrievalError("Bulk indexing consistency check timed out")
+                sleep(0.05)
+        self._last_batch.clear()

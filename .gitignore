@@ -6,7 +6,7 @@ build/
 .venv/
 .uv-cache/
 .env
-data/
+/data/
 *.db
 .pytest_cache/
 .ruff_cache/
@@ -14,3 +14,5 @@ data/
 htmlcov/
 eval/cache/
 .pytest_tmp*/
+
+.cache/

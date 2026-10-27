@@ -27,7 +27,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+data = ["huggingface_hub>=0.28", "pyarrow>=19.0", "reportlab>=4.2", "python-docx>=1.1"]
 dev = [
+    {include-group = "data"},
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "pytest-cov>=6.0",
