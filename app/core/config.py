@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     chunk_strategy: Literal["structure", "fixed"] = "structure"
     chunk_size: int = 400
+    chunk_min_tokens: int = 80
     chunk_overlap: int = 60
     retrieval_top_k: int = 10
     request_timeout_s: float = 30.0
