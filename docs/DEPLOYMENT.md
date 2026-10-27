@@ -10,6 +10,8 @@ flowchart LR
 
 ## Hosting
 
+Live demo: https://ai-investigation-engine-x3zw.onrender.com (Render free web service, `DEPLOYMENT_PROFILE=lite`, region Virginia; Qdrant Cloud and Neon hold all state). A GitHub Actions keep-alive (`SPACE_URL` repository variable) calls `/ready` every two days so the free Qdrant and Neon tiers are never suspended for inactivity.
+
 The demo uses Render free with the lite profile: 512 MB RAM, 0.1 vCPU, no card.
 See [Render plans](https://render.com/docs/compute-plans) and
 [free service limits](https://render.com/docs/free). It sleeps after 15 minutes idle;

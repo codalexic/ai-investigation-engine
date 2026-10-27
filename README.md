@@ -9,7 +9,7 @@ flags contradicting sources and refuses to answer when the evidence is not there
 > architecture doc, connects `INC-2031 → CHG-1042 → payment-gateway → fraud-api`, cites each step, and reports that the
 > preliminary incident report blamed a different change and that two sources disagree on the outage duration.
 
-**Live demo:** _link added after deployment_ · **Docs:** [Architecture](docs/ARCHITECTURE.md) ·
+**Live demo:** [ai-investigation-engine-x3zw.onrender.com](https://ai-investigation-engine-x3zw.onrender.com) (free tier, lite profile; the first request after ~15 min idle wakes the service, ~1 min) · **Docs:** [Architecture](docs/ARCHITECTURE.md) ·
 [Evaluation report](docs/EVALUATION_REPORT.md) · [Deployment](docs/DEPLOYMENT.md)
 
 ## Highlights
@@ -27,8 +27,8 @@ flags contradicting sources and refuses to answer when the evidence is not there
   abstention when evidence is missing or unsupported; prompt-injection defences for retrieved text.
 - **Production concerns**: provider fallback with retries and circuit breakers, response and answer caches, rate limiting,
   SSE streaming, Prometheus metrics, persisted traces, 230+ automated tests, CI.
-- **Automated evaluation**: 66-question end-to-end set (multi-hop, multi-document, contradiction, unanswerable, injection)
-  plus a 1,000-question retrieval benchmark with confidence intervals and configuration comparisons.
+- **Automated evaluation**: 66-question investigation set (multi-hop, multi-document, contradiction, unanswerable,
+  injection), end-to-end agent vs. single-shot comparison on 54 of them, plus a 1,000-question retrieval benchmark with confidence intervals and configuration comparisons.
 
 ## Architecture
 
@@ -62,7 +62,7 @@ Design decisions and trade-offs are recorded as ten ADRs in [docs/ARCHITECTURE.m
 | LLMs | Groq `openai/gpt-oss-120b` (primary), Gemini (fallback/judge), OpenRouter | free tiers, OpenAI-compatible tool calling |
 | Relational store | Postgres (Neon) / SQLite locally, SQLAlchemy 2 | registry, versions, BM25 stats, caches, traces |
 | UI | static HTML + vanilla JS | no build step; served by the API |
-| Hosting | Hugging Face Spaces (Docker), Qdrant Cloud, Neon | all free tiers |
+| Hosting | Render (Docker, lite profile), Qdrant Cloud, Neon | all free tiers |
 
 ## Data
 
@@ -118,6 +118,14 @@ API and Qdrant together.
   at statistically indistinguishable recall.
 - Single-shot retrieval is weakest on multi-hop investigation questions (Recall@10 ≈ 0.65): the second-hop document is
   never named in the question. This is the case the agent's tool loop targets.
+
+| End-to-end (54 questions, same generator: gemini-3.5-flash-lite) | Judge correctness | Citation recall | False abstention | Multi-hop correctness | Tokens/question |
+|---|---|---|---|---|---|
+| single-shot RAG | 0.66 | 0.78 | 0.43 | 0.33 | 1.9k |
+| **agent (planner + tool loop)** | **0.81** | **0.85** | **0.28** | **0.86** | 7.9k |
+
+The agent wins on 14 questions and loses on 4, almost entirely by resolving bridge entities on multi-hop questions.
+No configuration answered an unanswerable question, and all injection probes were resisted.
 
 Reproduce with `make index-chunking eval-retrieval eval-chunking eval-embeddings eval-e2e report`.
 
