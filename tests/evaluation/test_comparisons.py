@@ -116,7 +116,7 @@ def test_report_missing_and_results(tmp_path, container, sample_questions):
     path = build(tmp_path)
     report = path.read_text()
     assert "not run yet" in report
-    assert report.count("<!-- analysis -->") == 2
+    assert "Analysis pending." in report
     retrieval_run(
         container.retriever,
         sample_questions,
