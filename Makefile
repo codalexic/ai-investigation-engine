@@ -14,7 +14,7 @@ test:
 	UV_CACHE_DIR=.uv-cache uv run python -m pytest -q -p no:cacheprovider --basetemp=.pytest_tmp
 
 run:
-	uv run uvicorn app.api.main:app --reload --port 7860
+	uv run python -m uvicorn app.api.main:app --reload --port 7860
 
 .PHONY: data index index-fixed
 data:
@@ -26,4 +26,4 @@ index:
 	uv run python scripts/index_corpus.py --sources hotpotqa,postmortems,synthetic
 
 index-fixed:
-	uv run python scripts/index_corpus.py --sources synthetic,postmortems --collection documents_fixed --chunk-strategy fixed
+	uv run python scripts/index_corpus.py --sources hotpotqa,postmortems,synthetic --collection documents_fixed --chunk-strategy fixed

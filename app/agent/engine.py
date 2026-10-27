@@ -12,7 +12,7 @@ from app.agent.synthesizer import Claim, Contradiction, Synthesizer
 from app.agent.tools import InvestigationTools
 from app.agent.verifier import Verifier
 from app.core.config import Settings
-from app.core.errors import LLMError, RetrievalError
+from app.core.errors import LLMError, LLMRateLimitError, RetrievalError
 from app.core.logging import get_logger
 from app.llm.accounting import UsageTracker
 from app.llm.client import LLMClient
@@ -200,6 +200,8 @@ class InvestigationEngine:
                     if key in cited
                 ],
             )
+        except LLMRateLimitError:
+            raise
         except (LLMError, RetrievalError) as exc:
             get_logger(__name__).warning("investigation_failed error_type=%s", type(exc).__name__)
             result.error = "Investigation failed: a provider or retrieval service was unavailable."
