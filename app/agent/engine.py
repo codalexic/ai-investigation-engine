@@ -1,12 +1,16 @@
+from __future__ import annotations
+
 from collections.abc import Iterator
 from time import perf_counter
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
 from app.agent.evidence import EvidenceStore
 from app.agent.investigator import Investigator
-from app.agent.nli import NliModel
+
+if TYPE_CHECKING:
+    from app.agent.nli import NliModel
 from app.agent.planner import Planner
 from app.agent.synthesizer import Claim, Contradiction, Synthesizer
 from app.agent.tools import InvestigationTools

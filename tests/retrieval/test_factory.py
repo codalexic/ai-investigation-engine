@@ -11,7 +11,7 @@ def test_normal_factory_uses_configured_models(monkeypatch):
     reranking_constructor = Mock()
     store_constructor = Mock()
     monkeypatch.setattr("app.retrieval.factory.FastEmbedEmbedder", embedding_constructor)
-    monkeypatch.setattr("app.retrieval.factory.CrossEncoderReranker", reranking_constructor)
+    monkeypatch.setattr("app.retrieval.rerank.CrossEncoderReranker", reranking_constructor)
     monkeypatch.setattr("app.retrieval.factory.QdrantStore", store_constructor)
     monkeypatch.setattr("app.retrieval.factory.make_qdrant_client", Mock())
     monkeypatch.setattr("app.retrieval.factory.Bm25StatsRepository", Mock())

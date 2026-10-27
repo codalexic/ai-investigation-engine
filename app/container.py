@@ -6,7 +6,6 @@ from fastapi import Request
 from sqlalchemy.engine import Engine
 
 from app.agent.engine import InvestigationEngine
-from app.agent.nli import FakeNli, OnnxNliModel
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.ingest.chunking import Chunker, build_chunker
@@ -44,9 +43,14 @@ class Container:
                 registry, store, build_chunker(settings), MinHasher(), LSHIndex()
             )
             started = perf_counter()
-            pipeline.rebuild_lsh()
+            if settings.lsh_rebuild_on_startup:
+                pipeline.rebuild_lsh()
             get_logger(__name__).info(
-                "lsh_rebuilt", extra={"duration_ms": (perf_counter() - started) * 1000}
+                "lsh_startup",
+                extra={
+                    "mode": "rebuild" if settings.lsh_rebuild_on_startup else "empty",
+                    "duration_ms": (perf_counter() - started) * 1000,
+                },
             )
             providers = [
                 p for p in settings.llm_provider_order if getattr(settings, f"{p}_api_key", None)
@@ -60,11 +64,15 @@ class Container:
                 resources.callback(close_llm, llm)
             if llm and settings.llm_cache_enabled:
                 llm = CachedClient(llm, engine)
-            nli = (
-                FakeNli()
-                if settings.app_env == "test"
-                else OnnxNliModel(settings.nli_model, settings.model_cache_dir)
-            )
+            nli = None
+            if settings.nli_enabled:
+                from app.agent.nli import FakeNli, OnnxNliModel
+
+                nli = (
+                    FakeNli()
+                    if settings.app_env == "test"
+                    else OnnxNliModel(settings.nli_model, settings.model_cache_dir)
+                )
             investigator = (
                 InvestigationEngine(
                     retriever, store, llm, nli if settings.nli_enabled else None, settings
@@ -82,6 +90,8 @@ class Container:
             if self.settings.rerank_enabled:
                 _ = self.retriever.reranker.model
             if self.settings.nli_enabled:
+                from app.agent.nli import OnnxNliModel
+
                 nli = self.investigator.nli if self.investigator else None
                 if not isinstance(nli, OnnxNliModel):
                     nli = OnnxNliModel(self.settings.nli_model, self.settings.model_cache_dir)

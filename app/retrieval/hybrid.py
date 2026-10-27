@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date
 from time import perf_counter
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -19,7 +21,9 @@ from app.retrieval.fusion import (
     mmr,
     weighted_rrf,
 )
-from app.retrieval.rerank import Reranker
+
+if TYPE_CHECKING:
+    from app.retrieval.rerank import Reranker
 from app.retrieval.store import QdrantStore, QueryFilters
 
 
@@ -37,7 +41,7 @@ class RetrievalConfig(BaseModel):
     entity_boost: float = Field(default=0.15, ge=0)
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> "RetrievalConfig":
+    def from_settings(cls, settings: Settings) -> RetrievalConfig:
         return cls(
             top_k=settings.retrieval_top_k,
             candidate_k=settings.candidate_k,
@@ -73,7 +77,7 @@ class HybridRetriever:
         store: QdrantStore,
         embedder: Embedder,
         bm25: Bm25Encoder,
-        reranker: Reranker,
+        reranker: Reranker | None,
         settings: Settings,
     ) -> None:
         self.store, self.embedder, self.bm25, self.reranker = store, embedder, bm25, reranker
@@ -149,7 +153,7 @@ class HybridRetriever:
         ranked = sorted(candidates.values(), key=lambda c: c.score, reverse=True)
         timings["fusion"] = (perf_counter() - stage) * 1000
         stage = perf_counter()
-        if cfg.rerank and ranked:
+        if cfg.rerank and ranked and self.reranker is not None:
             head = self.reranker.rerank(query, ranked[: cfg.rerank_top_n], cfg.rerank_top_n)
             for chunk, score in head:
                 candidates[chunk.chunk_id] = replace(chunk, score=score)

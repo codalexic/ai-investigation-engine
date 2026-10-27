@@ -1,10 +1,15 @@
+from __future__ import annotations
+
 import re
 from itertools import combinations, pairwise
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from app.agent.evidence import EvidenceStore
-from app.agent.nli import NliModel
+
+if TYPE_CHECKING:
+    from app.agent.nli import NliModel
 from app.agent.synthesizer import AnswerMetadata, Claim, Contradiction
 from app.agent.textnorm import normalize_citations, normalize_llm_text
 from app.agent.windows import content_tokens
@@ -94,71 +99,70 @@ class Verifier:
             claim.support_score = claim.grounding_score = 0
             claim.support_method = None
             claim.supported = False
-        if active:
-            try:
-                for claim in metadata.claims:
-                    claim.kind = _claim_kind(claim.text, question, known)
-                    claim.evidence = list(dict.fromkeys(k for k in claim.evidence if k in known))
-                    if claim.kind != "factual":
-                        claim.supported = True
-                        continue
-                    services = [
-                        v
-                        for item in known.values()
-                        for v in item.chunk.payload.get("entities", {}).get("services", [])
+        try:
+            for claim in metadata.claims:
+                claim.kind = _claim_kind(claim.text, question, known)
+                claim.evidence = list(dict.fromkeys(k for k in claim.evidence if k in known))
+                if claim.kind != "factual":
+                    claim.supported = True
+                    continue
+                services = [
+                    v
+                    for item in known.values()
+                    for v in item.chunk.payload.get("entities", {}).get("services", [])
+                ]
+                parts = _claim_parts(_strip_markdown(claim.text), services)
+                results = []
+                for part in parts:
+                    windows = [
+                        w
+                        for key in claim.evidence
+                        for w in _support_windows(
+                            known[key].chunk.text, part, self.settings.nli_window_top_k
+                        )
                     ]
-                    parts = _claim_parts(_strip_markdown(claim.text), services)
-                    results = []
-                    for part in parts:
-                        windows = [
-                            w
-                            for key in claim.evidence
-                            for w in _support_windows(
-                                known[key].chunk.text, part, self.settings.nli_window_top_k
-                            )
-                        ]
-                        windows = sorted(
-                            set(windows), key=lambda w: (-len(_tokens(w) & _tokens(part)), w)
-                        )
-                        best_windows = windows[:2]
-                        premises = list(windows)
-                        if len(claim.evidence) > 1 and windows:
-                            premises.append(" ".join(windows[:3]))
-                        scores = self.nli.predict_batch([(w, part) for w in premises])
-                        entailment = max((v["entailment"] for v in scores), default=0)
-                        contradiction = max(
-                            (v["contradiction"] for v in scores[: len(best_windows)]), default=1
-                        )
-                        text = " ".join(known[k].chunk.text for k in claim.evidence)
-                        entities = _entities(part, services)
-                        quotes = {q.lower() for q in re.findall(r'"([^"\n]+)"', part)}
-                        entities.update(quotes)
-                        evidence_entities = _entities(text, services)
-                        evidence_entities.update(q for q in quotes if q in text.lower())
-                        # Grounding compares against all cited text: compound claims draw their
-                        # words from several sentences, while entities and NLI guard precision.
-                        overlap = len(_tokens(part) & _tokens(text)) / max(1, len(_tokens(part)))
-                        grounded = (
-                            contradiction < 0.9
-                            and entities <= evidence_entities
-                            and overlap >= (0.5 if entities else 0.75)
-                        )
-                        results.append((entailment, overlap, grounded))
-                    claim.support_score = min((r[0] for r in results), default=0)
-                    claim.grounding_score = min((r[1] for r in results), default=0)
-                    claim.supported = all(
-                        r[0] >= self.settings.support_threshold or r[2] for r in results
+                    windows = sorted(
+                        set(windows), key=lambda w: (-len(_tokens(w) & _tokens(part)), w)
                     )
-                    claim.support_method = (
-                        "nli"
-                        if claim.support_score >= self.settings.support_threshold
-                        else "grounding"
-                        if claim.supported
-                        else None
+                    best_windows = windows[:2]
+                    premises = list(windows)
+                    if len(claim.evidence) > 1 and windows:
+                        premises.append(" ".join(windows[:3]))
+                    scores = self.nli.predict_batch([(w, part) for w in premises]) if active else []
+                    entailment = max((v["entailment"] for v in scores), default=0)
+                    contradiction = max(
+                        (v["contradiction"] for v in scores[: len(best_windows)]), default=0
                     )
-            except LLMError as exc:
-                get_logger(__name__).warning("nli_unavailable error=%s", str(exc))
-                active = False
+                    text = " ".join(known[k].chunk.text for k in claim.evidence)
+                    entities = _entities(part, services)
+                    quotes = {q.lower() for q in re.findall(r'"([^"\n]+)"', part)}
+                    entities.update(quotes)
+                    evidence_entities = _entities(text, services)
+                    evidence_entities.update(q for q in quotes if q in text.lower())
+                    # Grounding compares against all cited text: compound claims draw their
+                    # words from several sentences, while entities and NLI guard precision.
+                    overlap = len(_tokens(part) & _tokens(text)) / max(1, len(_tokens(part)))
+                    grounded = (
+                        contradiction < 0.9
+                        and entities <= evidence_entities
+                        and overlap >= (0.5 if entities else 0.75)
+                    )
+                    results.append((entailment, overlap, grounded))
+                claim.support_score = min((r[0] for r in results), default=0)
+                claim.grounding_score = min((r[1] for r in results), default=0)
+                claim.supported = all(
+                    (active and r[0] >= self.settings.support_threshold) or r[2] for r in results
+                )
+                claim.support_method = (
+                    "nli"
+                    if active and claim.support_score >= self.settings.support_threshold
+                    else "grounding"
+                    if claim.supported
+                    else None
+                )
+        except LLMError as exc:
+            get_logger(__name__).warning("nli_unavailable error=%s", str(exc))
+            return Verifier(None, self.settings).verify(answer, metadata, evidence, question)
         for conflict in metadata.contradictions:
             conflict.evidence = [key for key in conflict.evidence if key in known]
         metadata.contradictions = [
@@ -173,33 +177,35 @@ class Verifier:
             key for claim in metadata.claims for key in claim.evidence
         }
         cited &= set(known)
-        sentences = []
-        for item in known.values():
-            text = item.chunk.text
-            services = item.chunk.payload.get("entities", {}).get("services", [])
-            for start, end in sentence_spans(text, 0, len(text)):
-                sentence = text[start:end].strip()
-                entities = extract_entities(sentence, services)
-                values = {v.lower() for group in entities.values() for v in group}
-                sentences.append((item, sentence, values))
         candidates = []
-        for left, right in combinations(sentences, 2):
-            a, b = left[0], right[0]
-            if cited and a.evidence_id not in cited and b.evidence_id not in cited:
-                continue
-            versions_differ = a.chunk.payload.get("version") != b.chunk.payload.get("version")
-            if a.chunk.doc_id == b.chunk.doc_id and not versions_differ:
-                continue
-            ids = frozenset((a.evidence_id, b.evidence_id))
-            if any(ids <= group for group in existing):
-                continue
-            shared = len(left[2] & right[2])
-            tokens_a, tokens_b = _tokens(left[1]), _tokens(right[1])
-            overlap = len(tokens_a & tokens_b) / max(1, len(tokens_a | tokens_b))
-            if shared and overlap >= 0.2:
-                candidates.append((shared, left, right))
-        candidates.sort(key=lambda row: row[0], reverse=True)
-        candidates = candidates[:40]
+        if active:
+            sentences = []
+            for item in known.values():
+                text = item.chunk.text
+                services = item.chunk.payload.get("entities", {}).get("services", [])
+                for start, end in sentence_spans(text, 0, len(text)):
+                    sentence = text[start:end].strip()
+                    entities = extract_entities(sentence, services)
+                    values = {v.lower() for group in entities.values() for v in group}
+                    sentences.append((item, sentence, values))
+            candidates = []
+            for left, right in combinations(sentences, 2):
+                a, b = left[0], right[0]
+                if cited and a.evidence_id not in cited and b.evidence_id not in cited:
+                    continue
+                versions_differ = a.chunk.payload.get("version") != b.chunk.payload.get("version")
+                if a.chunk.doc_id == b.chunk.doc_id and not versions_differ:
+                    continue
+                ids = frozenset((a.evidence_id, b.evidence_id))
+                if any(ids <= group for group in existing):
+                    continue
+                shared = len(left[2] & right[2])
+                tokens_a, tokens_b = _tokens(left[1]), _tokens(right[1])
+                overlap = len(tokens_a & tokens_b) / max(1, len(tokens_a | tokens_b))
+                if shared and overlap >= 0.2:
+                    candidates.append((shared, left, right))
+            candidates.sort(key=lambda row: row[0], reverse=True)
+            candidates = candidates[:40]
         if active:
             pairs = [
                 (a[1], b[1])
@@ -210,8 +216,7 @@ class Verifier:
                 scores = self.nli.predict_batch(pairs)
             except LLMError as exc:
                 get_logger(__name__).warning("nli_unavailable error=%s", str(exc))
-                active = False
-                scores = []
+                return Verifier(None, self.settings).verify(answer, metadata, evidence, question)
             for index, (_, left, right) in enumerate(candidates if active else []):
                 ids = [left[0].evidence_id, right[0].evidence_id]
                 if any(frozenset(ids) <= group for group in existing):
@@ -231,11 +236,6 @@ class Verifier:
                         )
                     )
                     existing.add(frozenset(ids))
-        if not active:
-            for claim in metadata.claims:
-                claim.support_score = 0
-                if claim.kind == "factual":
-                    claim.supported = bool(claim.evidence)
         unsupported = [
             sentence
             for sentence, claim in answer_claims
@@ -264,7 +264,7 @@ class Verifier:
             metadata.insufficient_information
             or not known
             or best < self.settings.abstain_min_evidence_score
-            or (active and ratio < 0.6)
+            or (ratio < 0.6)
             or first_uncited
             or uncited > len(ratio_claims)
             or (not active and not any(c.evidence for c in metadata.claims))
@@ -293,7 +293,7 @@ class Verifier:
             abstained=abstained,
             metadata=metadata,
             removed_citations=removed,
-            verification_mode="nli" if active else "citations_only",
+            verification_mode="nli" if active else "grounding",
             unsupported_sentences=unsupported,
         )
 

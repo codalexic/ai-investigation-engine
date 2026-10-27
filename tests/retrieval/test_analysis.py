@@ -184,3 +184,27 @@ def test_threaded_statistics_mutation_and_save(tmp_path):
     assert stats.N == 0 and not stats.df and not stats.dirty
     assert repo.load() == stats
     engine.dispose()
+
+
+def test_load_pages_through_terms_and_retries(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    repo = Bm25StatsRepository(engine)
+    stats = Bm25Statistics()
+    for doc in ["alpha beta", "gamma delta epsilon", "zeta eta theta iota"]:
+        stats.add_document(analyze(doc))
+    repo.save(stats)
+    assert repo.load(page_size=2) == stats
+    connect = engine.connect
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            from sqlalchemy.exc import OperationalError
+
+            raise OperationalError("select", {}, Exception("SSL connection closed"))
+        return connect()
+
+    monkeypatch.setattr(engine, "connect", flaky)
+    assert repo.load(page_size=2) == stats
+    engine.dispose()

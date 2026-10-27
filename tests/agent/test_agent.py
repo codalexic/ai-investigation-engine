@@ -297,14 +297,14 @@ def test_joint_support_and_partial_abstention():
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_citations_only_when_nli_disabled_or_missing(enabled):
+def test_grounding_when_nli_disabled_or_missing(enabled):
     evidence = EvidenceStore()
     evidence.add(chunk())
     report = Verifier(None, Settings(_env_file=None, nli_enabled=enabled)).verify(
         "payment-service rollback succeeded [E1].", AnswerMetadata(), evidence
     )
     assert not report.abstained
-    assert report.verification_mode == "citations_only"
+    assert report.verification_mode == "grounding"
     report = Verifier(None, Settings(_env_file=None, nli_enabled=enabled)).verify(
         "payment-service rollback succeeded.", AnswerMetadata(), evidence
     )
@@ -361,7 +361,7 @@ def test_heading_and_hedge_are_not_uncited_claims():
     assert len(report.metadata.claims) == 1
 
 
-def test_unavailable_nli_uses_citations_only(caplog):
+def test_unavailable_nli_uses_grounding(caplog):
     evidence = EvidenceStore()
     evidence.add(chunk())
     nli = Mock()
@@ -369,7 +369,7 @@ def test_unavailable_nli_uses_citations_only(caplog):
     report = Verifier(nli, Settings(_env_file=None)).verify(
         "payment-service rollback succeeded [E1].", AnswerMetadata(), evidence
     )
-    assert not report.abstained and report.verification_mode == "citations_only"
+    assert not report.abstained and report.verification_mode == "grounding"
     assert "nli_unavailable" in caplog.text
 
 
@@ -433,3 +433,21 @@ def test_investigator_sends_only_latest_results():
     assert "UNIQUE_last" in str(llm.messages[2])
     assert "E1: Incident" in llm.messages[2][1].content
     assert sum(count_tokens(str(messages)) for messages in llm.messages) < 7000
+
+
+@pytest.mark.parametrize(
+    "answer,abstained",
+    [
+        ("payment-service rollback succeeded [E1].", False),
+        ("payment-service lost 999 requests [E1].", True),
+        ("payment-service rollback succeeded.", True),
+    ],
+)
+def test_grounding_without_nli(answer, abstained):
+    evidence = EvidenceStore()
+    evidence.add(chunk())
+    report = Verifier(None, Settings(_env_file=None, nli_enabled=False)).verify(
+        answer, AnswerMetadata(), evidence
+    )
+    assert report.verification_mode == "grounding"
+    assert report.abstained == abstained

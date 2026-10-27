@@ -82,17 +82,35 @@ class Bm25StatsRepository:
         except SQLAlchemyError as exc:
             raise RetrievalError("Cannot initialize BM25 statistics") from exc
 
-    def load(self) -> Bm25Statistics:
-        try:
-            with self.engine.connect() as conn:
-                meta = dict(conn.execute(select(self.meta)).all())
-                return Bm25Statistics(
-                    meta.get("N", 0),
-                    meta.get("total_length", 0),
-                    Counter(dict(conn.execute(select(self.terms)).all())),
-                )
-        except SQLAlchemyError as exc:
-            raise RetrievalError("Cannot load BM25 statistics") from exc
+    def load(self, page_size: int = 20_000, attempts: int = 3) -> Bm25Statistics:
+        """Load statistics in keyset pages so slow hosts never hold one long-running query.
+
+        Managed Postgres poolers drop connections that stream ~200k rows for too long; each page
+        is a short query on a fresh connection and a failed page is retried.
+        """
+        df: Counter[str] = Counter()
+        meta: dict[str, int] = {}
+        last = ""
+        while True:
+            for attempt in range(attempts):
+                try:
+                    with self.engine.connect() as conn:
+                        if not meta:
+                            meta = dict(conn.execute(select(self.meta)).all())
+                        rows = conn.execute(
+                            select(self.terms)
+                            .where(self.terms.c.term > last)
+                            .order_by(self.terms.c.term)
+                            .limit(page_size)
+                        ).all()
+                    break
+                except SQLAlchemyError as exc:
+                    if attempt == attempts - 1:
+                        raise RetrievalError("Cannot load BM25 statistics") from exc
+            df.update(dict(rows))
+            if len(rows) < page_size:
+                return Bm25Statistics(meta.get("N", 0), meta.get("total_length", 0), df)
+            last = rows[-1][0]
 
     def save(self, stats: Bm25Statistics) -> None:
         with self._save_lock:
