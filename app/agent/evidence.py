@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from html import escape
 
+from app.agent.windows import evidence_excerpt
 from app.llm.tokens import fit_to_budget
 from app.retrieval.hybrid import RetrievedChunk
 from app.security.injection import sanitize_evidence
@@ -32,11 +33,12 @@ class EvidenceStore:
             item.discoveries.append(discovery)
         return key
 
-    def render(self, budget_tokens: int) -> str:
+    def render(self, budget_tokens: int, query: str = "") -> str:
         blocks = []
         for item in sorted(self.items.values(), key=lambda e: e.chunk.score, reverse=True):
             chunk = item.chunk
-            text, _ = sanitize_evidence(chunk.text)
+            selected = evidence_excerpt(chunk.text, query) if query else chunk.text
+            text, _ = sanitize_evidence(selected)
             text = escape(text, quote=False).replace(
                 "&amp;lt;/evidence&amp;gt;", "&lt;/evidence&gt;"
             )

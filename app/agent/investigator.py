@@ -9,6 +9,7 @@ from app.core.config import Settings
 from app.ingest.metadata import extract_entities
 from app.llm.client import LLMClient
 from app.llm.types import Message
+from app.security.injection import sanitize_evidence
 
 
 class Investigator:
@@ -19,6 +20,7 @@ class Investigator:
         self, question: str, plan: Plan, trace: list[dict[str, Any]]
     ) -> Iterator[tuple[str, dict[str, Any]]]:
         calls = 0
+        new_results: list[str] = []
         entities = (
             plan.entities
             if isinstance(plan.entities, dict)
@@ -46,6 +48,7 @@ class Investigator:
                     "latency_ms": (perf_counter() - started) * 1000,
                 }
             )
+            new_results.append(result)
             yield "tool_result", {"name": "search_documents", "content": result}
             calls += 1
         if hints and calls < self.settings.agent_max_tool_calls:
@@ -67,6 +70,7 @@ class Investigator:
                     "latency_ms": (perf_counter() - started) * 1000,
                 }
             )
+            new_results.append(result)
             yield "tool_result", {"name": "search_documents", "content": result}
             calls += 1
         messages = [
@@ -75,7 +79,14 @@ class Investigator:
                 role="user",
                 content=question
                 + "\n"
-                + self.tools.evidence.render(self.settings.llm_context_budget_tokens),
+                + sanitize_evidence("\n".join(new_results))[0][
+                    : self.settings.llm_context_budget_tokens * 4
+                ]
+                + "\nEvidence index:\n"
+                + "\n".join(
+                    f"{k}: {sanitize_evidence(str(v.chunk.payload.get('title', '')))[0]}"
+                    for k, v in self.tools.evidence.items.items()
+                ),
             ),
         ]
         for step in range(self.settings.agent_max_steps):
@@ -90,6 +101,7 @@ class Investigator:
                     "latency_ms": (perf_counter() - started) * 1000,
                 }
             )
+            messages = messages[:2]
             messages.append(
                 Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
             )
@@ -113,3 +125,12 @@ class Investigator:
                         "latency_ms": (perf_counter() - tool_started) * 1000,
                     }
                 )
+            messages[1] = Message(
+                role="user",
+                content=question
+                + "\nEvidence index:\n"
+                + "\n".join(
+                    f"{k}: {sanitize_evidence(str(v.chunk.payload.get('title', '')))[0]}"
+                    for k, v in self.tools.evidence.items.items()
+                ),
+            )

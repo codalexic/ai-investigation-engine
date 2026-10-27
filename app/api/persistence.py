@@ -64,7 +64,13 @@ class QueryRepository:
             k: v
             for k, v in settings.model_dump(mode="json").items()
             if k.startswith(("llm_", "nli_", "agent_", "abstain_"))
-            or k in {"openrouter_model", "support_threshold", "contradiction_threshold"}
+            or k
+            in {
+                "openrouter_model",
+                "support_threshold",
+                "contradiction_threshold",
+                "nli_window_top_k",
+            }
         }
         fingerprint["prompts"] = hashlib.sha256(
             json.dumps(
