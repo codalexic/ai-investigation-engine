@@ -18,6 +18,7 @@ dependencies = [
     { name = "httpx" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "onnxruntime" },
     { name = "orjson" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -28,6 +29,7 @@ dependencies = [
     { name = "qdrant-client" },
     { name = "sqlalchemy" },
     { name = "tenacity" },
+    { name = "tokenizers" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -56,6 +58,7 @@ requires-dist = [
     { name = "fastembed", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "numpy", specifier = ">=2.0" },
+    { name = "onnxruntime", specifier = ">=1.20" },
     { name = "orjson", specifier = ">=3.10" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.10" },
@@ -66,6 +69,7 @@ requires-dist = [
     { name = "qdrant-client", specifier = ">=1.13" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "tenacity", specifier = ">=9.0" },
+    { name = "tokenizers", specifier = ">=0.21" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
 

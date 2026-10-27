@@ -31,7 +31,12 @@ def entity_boost(
     return 1 + weight * matched / total if total else 1.0
 
 
-def date_proximity_boost(query: str, payload: dict[str, Any], weight: float = 0.15) -> float:
+def date_proximity_boost(
+    query: str,
+    payload: dict[str, Any],
+    weight: float = 0.15,
+    date_range: tuple[date, date] | None = None,
+) -> float:
     """Boost by 1 + weight when a chunk date lies inside the queried dates or month."""
     dates = [date.fromisoformat(d) for d in extract_entities(query)["dates"]]
     months: list[tuple[int | None, int]] = []
@@ -53,6 +58,8 @@ def date_proximity_boost(query: str, payload: dict[str, Any], weight: float = 0.
         parsed = parse_date(value)
         if parsed is None:
             continue
+        if date_range and date_range[0] <= parsed <= date_range[1]:
+            return 1 + weight
         if dates and min(dates) <= parsed <= max(dates):
             return 1 + weight
         if any(
