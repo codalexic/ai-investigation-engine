@@ -118,7 +118,7 @@ def embeddings_main() -> None:
 
 
 def e2e_main() -> None:
-    from app.evaluation.e2e import CONFIGS, run
+    from app.evaluation.e2e import CONFIGS, GEMINI_CONFIGS, run
 
     parser = argparse.ArgumentParser(
         description="Evaluate investigation quality with resumable caches"
@@ -126,7 +126,7 @@ def e2e_main() -> None:
     parser.add_argument("--config", choices=CONFIGS, default="full")
     parser.add_argument("--collection", default="documents")
     parser.add_argument("--database-url")
-    parser.add_argument("--questions", default="eval/questions.jsonl")
+    parser.add_argument("--questions", default="eval/questions_e2e.jsonl")
     parser.add_argument("--limit", type=int)
     parser.add_argument(
         "--judge", choices=("auto", "none", "groq", "gemini", "openrouter"), default="auto"
@@ -134,7 +134,7 @@ def e2e_main() -> None:
     parser.add_argument("--pause", type=float, default=2)
     args = parser.parse_args()
     settings = settings_for(args.collection, args.database_url)
-    provider = "gemini" if args.config == "gemini" else "groq"
+    provider = "gemini" if args.config in GEMINI_CONFIGS else "groq"
     generator_settings = settings.model_copy(
         update={
             "llm_provider_order": [provider],

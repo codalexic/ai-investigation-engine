@@ -39,8 +39,9 @@ eval-embeddings:
 	uv run python scripts/eval_embeddings.py --models BAAI/bge-small-en-v1.5,sentence-transformers/all-MiniLM-L6-v2 --subset-questions 300
 
 eval-e2e:
-	uv run python scripts/eval_e2e.py --config full
-	uv run python scripts/eval_e2e.py --config no_agent
+	uv run python scripts/eval_e2e.py --config no_agent --judge gemini
+	uv run python scripts/eval_e2e.py --config no_agent_gemini --judge gemini
+	uv run python scripts/eval_e2e.py --config gemini --judge gemini
 
 report:
 	uv run python scripts/make_report.py
