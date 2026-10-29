@@ -309,9 +309,9 @@ def build(root: Path = Path(".")) -> Path:
     for path in sorted((root / "eval/results").glob("*.json")):
         results.append((path.stem, json.loads(path.read_text(encoding="utf-8"))))
     lines = [
-        "# Evaluation report",
-        "This report evaluates retrieval, chunking, embeddings, and end-to-end answer quality. "
-        "Raw results live in eval/results/.",
+        "# Detailed evaluation results",
+        "Generated from eval/results/ by `make report`. The written report with methodology and "
+        "discussion is docs/EVALUATION_REPORT.md.",
         "## Summary",
         *_summary(results, counts),
         "## Analysis",
@@ -390,7 +390,7 @@ def build(root: Path = Path(".")) -> Path:
                 ]
             )
     lines.extend(details)
-    output = root / "docs/EVALUATION_REPORT.md"
+    output = root / "eval/results/REPORT.md"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n\n".join(lines) + "\n", encoding="utf-8")
     return output

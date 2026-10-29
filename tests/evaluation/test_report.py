@@ -110,7 +110,7 @@ def test_analysis_included_verbatim_and_missing_files(tmp_path):
     assert "Analysis pending." in report
     assert "Not run yet" in report
     analysis = "### Findings\n\nExact text.\n\n### Improvements\nKeep this.\n"
-    (tmp_path / "eval").mkdir()
+    (tmp_path / "eval").mkdir(exist_ok=True)
     (tmp_path / "eval/analysis.md").write_text(analysis, encoding="utf-8")
     report = build(tmp_path).read_text(encoding="utf-8")
     assert analysis in report
