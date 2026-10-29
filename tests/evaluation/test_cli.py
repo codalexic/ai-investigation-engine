@@ -96,7 +96,7 @@ def test_cli_other_entrypoints(tmp_path, monkeypatch, container, sample_question
     assert called == [tmp_path.__class__(".")]
     monkeypatch.setattr("sys.argv", ["make_report.py"])
     cli.report_main()
-    assert (tmp_path / "docs/EVALUATION_REPORT.md").exists()
+    assert (tmp_path / "eval/results/REPORT.md").exists()
     write_jsonl(tmp_path / "questions.jsonl", sample_questions)
     monkeypatch.setattr(cli, "connect", lambda settings: nullcontext(container))
     monkeypatch.setattr(cli, "settings_for", lambda *args: container.settings)

@@ -13,4 +13,3 @@ data
 *.db
 eval/cache
 tests
-.specs
