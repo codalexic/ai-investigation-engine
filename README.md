@@ -1,133 +1,144 @@
 # AI Investigation Engine
 
-An agentic retrieval system for **investigating** large, mixed document collections — not "chat with a PDF".
-It answers questions whose answer is spread across several documents, links facts between them, cites every claim,
-flags contradicting sources and refuses to answer when the evidence is not there.
+A system for answering questions that need more than one document. You ask something like *"Which changes caused the
+March payment disruption, which services were hit, and which documents confirm it?"* and the engine plans the
+investigation, searches across incident reports, change logs and architecture docs, follows the links between them, and
+answers with a citation on every claim. If the sources disagree it says so, and if the evidence isn't there it refuses to
+guess.
 
-> *"Which system changes caused the payment processing disruption in March, which services were affected, and which
-> documents confirm it?"* — the engine plans sub-questions, searches incident reviews, the change log and the
-> architecture doc, connects `INC-2031 → CHG-1042 → payment-gateway → fraud-api`, cites each step, and reports that the
-> preliminary incident report blamed a different change and that two sources disagree on the outage duration.
+**Live demo:** [ai-investigation-engine-x3zw.onrender.com](https://ai-investigation-engine-x3zw.onrender.com)
+(free tier: the first request after 15 idle minutes takes about a minute while the service wakes up)
 
-**Live demo:** [ai-investigation-engine-x3zw.onrender.com](https://ai-investigation-engine-x3zw.onrender.com) (free tier, lite profile; the first request after ~15 min idle wakes the service, ~1 min) · **Docs:** [Architecture](docs/ARCHITECTURE.md) ·
-[Evaluation report](docs/EVALUATION_REPORT.md) · [Deployment](docs/DEPLOYMENT.md)
+**Docs:** [Architecture and decisions](docs/ARCHITECTURE.md) · [Evaluation report](docs/EVALUATION_REPORT.md) ·
+[Deployment](docs/DEPLOYMENT.md) · [AI usage](docs/AI_USAGE_REPORT.md)
 
-## Highlights
+## What it does
 
-- **66,795 documents indexed** (HotpotQA paragraphs, real public post-mortems, a synthetic incident knowledge base) —
-  ~67k chunks in Qdrant.
-- **Six input formats** (PDF, DOCX, Markdown/TXT, HTML, JSON, CSV) with metadata and entity extraction, two chunking
-  strategies, exact + MinHash/LSH near-duplicate detection, versioned updates and deletes.
-- **Hybrid retrieval with custom ranking**: own BM25 served as Qdrant sparse vectors + dense embeddings → weighted
-  reciprocal rank fusion → entity/date boosts → cross-encoder reranking → MMR diversification. Every result explains
-  its rank.
-- **Agentic RAG**: planner, deterministic seed retrieval, bounded native tool calling (`search_documents`,
-  `get_document`, `find_related`, `timeline`), streamed synthesis with `[E#]` citations.
-- **Verification outside the LLM**: citation checks, NLI-based claim support, sentence-level contradiction mining,
-  abstention when evidence is missing or unsupported; prompt-injection defences for retrieved text.
-- **Production concerns**: provider fallback with retries and circuit breakers, response and answer caches, rate limiting,
-  SSE streaming, Prometheus metrics, persisted traces, 230+ automated tests, CI.
-- **Automated evaluation**: 66-question investigation set (multi-hop, multi-document, contradiction, unanswerable,
-  injection), end-to-end agent vs. single-shot comparison on 54 of them, plus a 1,000-question retrieval benchmark with confidence intervals and configuration comparisons.
+For the March example above, the engine finds the incident review for INC-2031, reads that change CHG-1042 caused it,
+follows CHG-1042 to the change log and the payment-gateway runbook, and points out two problems in the record: the
+preliminary report blamed a different change, and two sources give different outage durations.
+
+- **Ingestion.** PDF, DOCX, Markdown/TXT, HTML, JSON and CSV. Title, dates, document type and entities (service names,
+  `INC-`/`CHG-` ids) are extracted at ingest. Exact duplicates are caught by hash, near-duplicates by MinHash/LSH.
+  Documents can be added, replaced (a new version is kept) and deleted. Two chunking strategies are implemented and
+  compared.
+- **Search.** Hybrid retrieval in Qdrant: dense embeddings plus my own BM25 stored as sparse vectors. Results are merged with
+  weighted reciprocal rank fusion, boosted for matching entities and dates, re-ranked with a cross-encoder and diversified
+  with MMR. Every result shows why it ranked where it did.
+- **Investigation.** A planner breaks the question into sub-questions. A bounded tool loop then lets the model call
+  `search_documents`, `get_document`, `find_related` and `timeline`, and the answer streams back with `[E#]` citations.
+- **Verification.** This runs outside the model: every cited claim is checked against its source, contradictions between
+  sources are flagged, and the engine abstains when too few claims are supported. Retrieved text is treated as data,
+  never as instructions (prompt-injection defence).
+- **Reliability.** Provider fallback (Groq → Gemini) with retries, rate-limit handling and a circuit breaker; response and
+  answer caches; Prometheus metrics; stored traces of every investigation.
 
 ## Architecture
 
 ```
-Browser UI ──► FastAPI (/api, SSE, /metrics)
+Browser UI ──► FastAPI (REST + SSE streaming, /metrics)
                  │
    ┌─────────────┼──────────────────────────────┐
    ▼             ▼                              ▼
-Ingestion     Hybrid retrieval              Investigation engine
-parse→meta    dense + own BM25              plan → seed search → tool loop
-→dedup→chunk  → RRF → boosts                → streamed synthesis → NLI verifier
-   │          → rerank → MMR                        │
-   ▼             ▼                                  ▼
-Postgres      Qdrant (dense + sparse        LLM layer: Groq / Gemini / OpenRouter
-(registry,    named vectors, payload)       retries · fallback · cache · cost
- BM25 stats,
- caches, traces)
+Ingestion     Hybrid retrieval              Investigation
+parse → meta  dense + BM25 (sparse)         plan → seed search → tool loop
+→ dedup       → weighted RRF → boosts       → streamed answer → verifier
+→ chunk       → rerank → MMR                        │
+   │             │                                  ▼
+   ▼             ▼                          LLMs: Groq gpt-oss-120b,
+Postgres      Qdrant (dense + sparse        Gemini as fallback / judge
+(registry,    vectors, payloads)
+ versions, BM25 stats, caches, traces)
 ```
 
-Design decisions and trade-offs are recorded as ten ADRs in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The reasoning behind each major choice is written up as ten ADRs in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Tech stack
+## Why these choices
 
-| Concern | Choice | Why |
+| Area | Choice | Reason |
 |---|---|---|
-| API / backend | Python 3.11, FastAPI, pydantic | typed, async streaming, OpenAPI docs at `/docs` |
-| Vector database | Qdrant | dense + sparse vectors in one collection, payload filters, free cloud tier |
-| Keyword search | own BM25 encoder | identifiers like `CHG-1042` tokenised correctly; incremental statistics |
-| Embeddings / reranker | `bge-small-en-v1.5`, `ms-marco-MiniLM-L-6-v2` via fastembed (ONNX) | no PyTorch, small image, fast CPU inference |
-| Verification | `nli-deberta-v3-xsmall` (ONNX) | measurable claim support and contradiction signal |
-| LLMs | Groq `openai/gpt-oss-120b` (primary), Gemini (fallback/judge), OpenRouter | free tiers, OpenAI-compatible tool calling |
-| Relational store | Postgres (Neon) / SQLite locally, SQLAlchemy 2 | registry, versions, BM25 stats, caches, traces |
-| UI | static HTML + vanilla JS | no build step; served by the API |
-| Hosting | Render (Docker, lite profile), Qdrant Cloud, Neon | all free tiers |
+| Vector DB | Qdrant | Dense and sparse vectors live in one collection, so hybrid search is a single query. It has payload filters and a free cloud tier. |
+| Keyword search | My own BM25 | Off-the-shelf tokenisers split ids like `CHG-1042`; mine keeps them whole. The statistics update incrementally when documents are added or removed. |
+| Fusion | Weighted RRF + boosts + MMR | Rank-based fusion doesn't need dense and BM25 scores on the same scale. Boosts reward matching entities and dates; MMR stops one document from filling the context. |
+| Embeddings | `bge-small-en-v1.5` (ONNX via fastembed) | Measured better recall than `all-MiniLM-L6-v2` (Recall@10 0.937 vs 0.868). Small and CPU-friendly, with no PyTorch in the image. |
+| Reranker | `ms-marco-MiniLM-L-6-v2` | +5 points of MRR on HotpotQA. It is the most expensive step, so it can be switched off. |
+| Verification | NLI model + grounding checks | A deterministic check that doesn't depend on the model judging its own answer. |
+| LLMs | Groq `gpt-oss-120b`, Gemini fallback | Free tiers with OpenAI-compatible tool calling. The judge comes from a different provider than the generator. |
+| Storage | Postgres (Neon) / SQLite locally | Registry, versions, BM25 statistics, caches and traces survive restarts. |
+| UI | Static HTML + vanilla JS | No build step; FastAPI serves it directly. |
+| Hosting | Render + Qdrant Cloud + Neon | All free. Hugging Face Spaces now needs PRO, and Cloud Run needs a billing account. |
 
 ## Data
 
-| Source | Records | Purpose |
+| Source | Records | Why |
 |---|---|---|
-| [HotpotQA](https://huggingface.co/datasets/hotpotqa/hotpot_qa) distractor validation | 66,555 unique paragraphs | scale, multi-hop questions with gold supporting documents |
-| [danluu/post-mortems](https://github.com/danluu/post-mortems) | 240 incident summaries | real incident domain |
-| Synthetic "Northwind Pay" knowledge base | 45 documents in 7 formats | planted cross-document facts, 4 contradictions, 3 gaps, near-duplicate, versioned runbook, 2 injection payloads |
+| [HotpotQA](https://huggingface.co/datasets/hotpotqa/hotpot_qa) (distractor, validation) | 66,555 paragraphs | Scale, plus multi-hop questions with gold supporting documents for retrieval metrics |
+| [danluu/post-mortems](https://github.com/danluu/post-mortems) | 240 incidents | Real incident write-ups |
+| Synthetic "Northwind Pay" company | 45 documents, 7 formats | Planted cross-document facts, 4 contradictions, 3 gaps, a near-duplicate, a versioned runbook and 2 injection attempts. These are cases public datasets don't provide. |
 
-Everything is rebuilt deterministically by `make data`; ground truth lives in `eval/data/`.
+In total that is 66,795 documents and about 67k chunks. Everything is rebuilt deterministically with `make data`; ground
+truth is in `eval/data/`.
 
-## Quick start
+## Results
 
-Requirements: Python 3.11, [uv](https://docs.astral.sh/uv/), Docker.
+Full methodology and error analysis are in the [evaluation report](docs/EVALUATION_REPORT.md).
+
+**Retrieval** (HotpotQA, 1,018 questions, full 66.8k-document index):
+
+| Config | Recall@10 | MRR@10 | p50 latency |
+|---|---|---|---|
+| dense | 0.839 | 0.898 | 27 ms |
+| BM25 | 0.760 | 0.795 | 19 ms |
+| hybrid | 0.862 | 0.881 | 41 ms |
+| hybrid + rerank | **0.874** | **0.933** | 804 ms (CPU) |
+
+**End to end** (54 questions across 7 categories; both rows use the same model, gemini-3.5-flash-lite):
+
+| | Correctness | Citation recall | False abstention | Multi-hop correctness | Tokens/question |
+|---|---|---|---|---|---|
+| single-shot RAG | 0.66 | 0.78 | 0.43 | 0.33 | 1.9k |
+| agent | **0.81** | **0.85** | **0.28** | **0.86** | 7.9k |
+
+The agent's gain comes almost entirely from multi-hop questions, where the second document is never named in the
+question and a single search can't find it. Neither configuration ever answered an unanswerable question, and every
+injection attempt failed. Structure-aware chunking reached the evidence with about a third of the context that fixed
+windows needed, at the same recall.
+
+## Running it locally
+
+You need Python 3.11, [uv](https://docs.astral.sh/uv/) and Docker.
 
 ```bash
 uv sync
-cp .env.example .env            # add at least one LLM key (GROQ_API_KEY or GEMINI_API_KEY) to enable investigations
-docker compose up -d qdrant     # local Qdrant on :6333
-make data                       # download/build the corpora and the evaluation set
+cp .env.example .env            # add GROQ_API_KEY and/or GEMINI_API_KEY
+docker compose up -d qdrant     # Qdrant on :6333
+make data                       # download and build the corpora and eval set
 make index                      # embed and index everything (~1.5 h on a laptop CPU)
 make run                        # http://localhost:7860
 ```
 
-Search and document management work without an LLM key; investigations need one. `docker compose up` runs the
-API and Qdrant together.
+Search and document management work without an LLM key; investigations need one. `docker compose up` starts the API
+and Qdrant together.
+
+To reproduce the evaluation:
+
+```bash
+make index-chunking eval-retrieval eval-chunking eval-embeddings eval-e2e report
+```
 
 ## API
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/documents` | upload a document (multipart) → created / duplicate / near-duplicate |
-| `GET` | `/api/documents`, `/api/documents/{id}`, `/api/documents/{id}/chunks` | list, inspect, view chunks |
-| `PUT` / `DELETE` | `/api/documents/{id}` | replace (new version) / delete |
-| `POST` | `/api/search` | retrieval only, with per-result ranking explanation |
-| `POST` | `/api/investigate`, `/api/investigate/stream` | full investigation as JSON or Server-Sent Events |
-| `GET` | `/api/stats`, `/api/traces` | index statistics, stored investigation traces |
-| `GET` | `/health`, `/ready`, `/metrics` | liveness, readiness, Prometheus metrics |
+| `POST` | `/api/documents` | Upload a document → created / duplicate / near-duplicate |
+| `GET` | `/api/documents`, `/api/documents/{id}`, `/api/documents/{id}/chunks` | List, inspect, view chunks |
+| `PUT` / `DELETE` | `/api/documents/{id}` | Replace (new version) / delete |
+| `POST` | `/api/search` | Retrieval only, with a ranking explanation per result |
+| `POST` | `/api/investigate`, `/api/investigate/stream` | Full investigation as JSON or Server-Sent Events |
+| `GET` | `/api/stats`, `/api/traces` | Index statistics, stored investigation traces |
+| `GET` | `/health`, `/ready`, `/metrics` | Liveness, readiness, Prometheus metrics |
 
-## Evaluation
-
-`docs/EVALUATION_REPORT.md` contains the methodology, all results and the error analysis. Headline numbers:
-
-| Retrieval on HotpotQA (n = 1,018, 66.8k-document index) | Recall@10 | MRR@10 | p50 latency |
-|---|---|---|---|
-| dense (bge-small) | 0.839 | 0.898 | 27 ms |
-| BM25 (own) | 0.760 | 0.795 | 19 ms |
-| hybrid (weighted RRF) | 0.862 | 0.881 | 41 ms |
-| **hybrid + cross-encoder rerank** | **0.874** | **0.933** | 804 ms (CPU) |
-
-- `bge-small-en-v1.5` beats `all-MiniLM-L6-v2` on dense Recall@10, 0.937 vs 0.868, with non-overlapping 95% CIs.
-- Structure-aware chunking reaches the first evidence chunk with 3× less context than fixed windows (201 vs 626 tokens)
-  at statistically indistinguishable recall.
-- Single-shot retrieval is weakest on multi-hop investigation questions (Recall@10 ≈ 0.65): the second-hop document is
-  never named in the question. This is the case the agent's tool loop targets.
-
-| End-to-end (54 questions, same generator: gemini-3.5-flash-lite) | Judge correctness | Citation recall | False abstention | Multi-hop correctness | Tokens/question |
-|---|---|---|---|---|---|
-| single-shot RAG | 0.66 | 0.78 | 0.43 | 0.33 | 1.9k |
-| **agent (planner + tool loop)** | **0.81** | **0.85** | **0.28** | **0.86** | 7.9k |
-
-The agent wins on 14 questions and loses on 4, almost entirely by resolving bridge entities on multi-hop questions.
-No configuration answered an unanswerable question, and all injection probes were resisted.
-
-Reproduce with `make index-chunking eval-retrieval eval-chunking eval-embeddings eval-e2e report`.
+Interactive docs are at `/docs`.
 
 ## Project layout
 
@@ -136,39 +147,44 @@ app/
   core/        settings, logging, errors
   ingest/      parsers, metadata, chunking, dedup, registry, pipeline
   retrieval/   embeddings, BM25, Qdrant store, fusion/MMR, reranker, hybrid retriever
-  llm/         provider client, fallback, cache, accounting
+  llm/         provider client, fallback, cache, cost accounting
   agent/       planner, investigator, tools, synthesizer, verifier, NLI
   security/    prompt-injection scanning
   api/ ui/     REST/SSE API and web interface
   corpus/      dataset builders, indexer, cloud migration
   evaluation/  metrics and evaluation runners
-scripts/       CLIs for data, indexing, evaluation, deployment
+scripts/       command-line entry points
 eval/          questions, ground truth, results
 tests/         unit, integration and API tests
 ```
 
-## Testing
+## Tests
 
 ```bash
 make lint
-make test          # 230+ tests, no network needed (fake models and LLMs)
+make test      # 348 tests; no network needed (fake models and LLMs)
 RUN_MODEL_TESTS=1 uv run python -m pytest -m models   # optional: real ONNX models
 ```
 
+CI runs lint and tests on every push and pull request.
+
 ## Deployment
 
-The demo runs on Render free using `Dockerfile.lite` and `render.yaml`, with Qdrant Cloud and Neon Postgres.
-Lite targets 512 MB / 0.1 vCPU with grounding verification, reranking and NLI disabled.
-Render sleeps after 15 minutes idle. Full remains the default for hosts with at least 2 GB RAM.
-The corpus is embedded once locally and migrated, so the cloud never re-embeds. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
-for the architecture, secrets handling, free-tier limits and costs.
+The demo runs on Render's free web service (512 MB RAM, 0.1 vCPU), with Qdrant Cloud for vectors and Neon Postgres
+for everything else, so the container itself holds no state. The corpus is embedded once locally and migrated, so the
+cloud never re-embeds anything. API keys live only in Render's secret store and in a git-ignored `.env`.
+
+512 MB isn't enough for the cross-encoder and the NLI model, so the demo uses a **lite profile**: no reranking (Recall@10
+0.862 instead of 0.874), and grounding checks instead of NLI. The full profile is the default anywhere with 2 GB or
+more. A GitHub Actions job pings the service every two days so the free Qdrant and Neon tiers aren't suspended for
+inactivity. Costs, limits and the step-by-step setup are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Limitations
 
-- The synthetic corpus is template-generated; real incident archives are messier.
-- The NLI model is small and works best on short premises; long multi-hop claims are checked against combined evidence,
-  which is an approximation.
-- Abstention thresholds were tuned by hand on the evaluation set.
-- Free-tier LLM quotas bound throughput; the app degrades to cached answers or abstention rather than failing.
-
-Run the app with a single worker process. The LSH index, BM25 statistics snapshot, and rate limiter are process-local; multiple workers cannot keep them consistent. The Dockerfile runs one worker. Keep WEB_CONCURRENCY and UVICORN_WORKERS set to 1.
+- The synthetic company is template-generated; real incident archives are messier.
+- The NLI model is small and works best on short sentences, so long multi-hop claims are only approximately verified.
+- The abstention thresholds were tuned by hand on the evaluation set itself, so the end-to-end numbers may be slightly
+  optimistic.
+- Free-tier LLM quotas limit throughput. When they run out, the app falls back to another provider, to cached answers, or
+  to abstaining rather than failing.
+- Run a single worker process: the LSH index, BM25 statistics snapshot and rate limiter live in process memory.
